@@ -1,0 +1,16 @@
+{
+  "name": "maisons-crm",
+  "version": "1.0.0",
+  "description": "Local dual-pipeline CRM for Maisons Buyers Agency",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "backup": "node scripts/backup.js",
+    "import-clients": "node scripts/import-clients-csv.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.19.2"
+  }
+}

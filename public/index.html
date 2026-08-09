@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Maisons Buyers Agency — CRM</title>
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-title">
+    <h1 id="pageTitle">Maisons Buyers Agency — Client Pipeline</h1>
+    <p id="pageSubtitle">Track clients from Engage through to Settlement</p>
+  </div>
+  <button id="addBtn" class="btn btn-add">+ Add Client</button>
+</header>
+
+<div class="toolbar">
+  <input id="searchInput" type="text" placeholder="Search clients..." class="search-input" />
+  <div class="pipeline-toggle" id="pipelineToggle">
+    <span class="toggle-indicator" id="toggleIndicator"></span>
+    <button class="toggle-btn active" data-pipeline="client">Clients</button>
+    <button class="toggle-btn" data-pipeline="partner">Referral Partners</button>
+  </div>
+  <button id="exportBtn" class="btn btn-secondary">Export CSV</button>
+  <span id="totalCount" class="total-count"></span>
+</div>
+
+<main id="board" class="board"></main>
+
+<!-- Add/Edit Client or Partner modal -->
+<div id="recordModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="recordModalTitle">Add Client</h2>
+      <button class="modal-close" data-close="recordModal">&times;</button>
+    </div>
+    <form id="recordForm" class="modal-body">
+      <input type="hidden" id="recordId" />
+
+      <div id="clientFields" class="field-group">
+        <label>Name <input type="text" id="f_name" required /></label>
+        <label>Phone <input type="text" id="f_phone" /></label>
+        <label>Email <input type="email" id="f_email" /></label>
+        <label>Budget <input type="text" id="f_budget_label" placeholder="e.g. $600,000 - $700,000" /></label>
+        <label>Status
+          <select id="f_status">
+            <option value="cold">Cold</option>
+            <option value="engaged">Engaged</option>
+            <option value="active">Active / Hot</option>
+            <option value="settled">Settled</option>
+            <option value="lost">Lost</option>
+          </select>
+        </label>
+        <label>Next action <input type="text" id="f_next_action_label" placeholder="e.g. Send shortlist" /></label>
+        <label>Next action date <input type="date" id="f_next_action_date" /></label>
+        <label>Referred by
+          <select id="f_referred_by_partner_id">
+            <option value="">— None —</option>
+          </select>
+        </label>
+        <label>Referral fee note <input type="text" id="f_referral_fee_note" placeholder="e.g. 20% of commission" /></label>
+        <label class="full-width">Notes <textarea id="f_notes"></textarea></label>
+      </div>
+
+      <div id="partnerFields" class="field-group hidden">
+        <label>Company name <input type="text" id="p_company_name" /></label>
+        <label>Contact name <input type="text" id="p_contact_name" required /></label>
+        <label>Mobile <input type="text" id="p_mobile" /></label>
+        <label>Email <input type="email" id="p_email" /></label>
+        <label class="full-width">Notes <textarea id="p_notes"></textarea></label>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" id="deleteRecordBtn" class="btn btn-danger hidden">Delete</button>
+        <div class="spacer"></div>
+        <button type="button" class="btn btn-secondary" data-close="recordModal">Cancel</button>
+        <button type="submit" class="btn btn-add">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Log call modal -->
+<div id="callModal" class="modal-overlay hidden">
+  <div class="modal modal-small">
+    <div class="modal-header">
+      <h2>Log Contact</h2>
+      <button class="modal-close" data-close="callModal">&times;</button>
+    </div>
+    <form id="callForm" class="modal-body">
+      <input type="hidden" id="call_client_id" />
+      <div class="call-type-row">
+        <label class="radio-pill"><input type="radio" name="call_type" value="call" checked /> Call</label>
+        <label class="radio-pill"><input type="radio" name="call_type" value="text" /> Text</label>
+        <label class="radio-pill"><input type="radio" name="call_type" value="voicemail" /> Voicemail</label>
+      </div>
+      <label class="full-width">Note (optional) <textarea id="call_note"></textarea></label>
+      <div class="modal-footer">
+        <div class="spacer"></div>
+        <button type="button" class="btn btn-secondary" data-close="callModal">Cancel</button>
+        <button type="submit" class="btn btn-add">Log It</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="js/spring.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

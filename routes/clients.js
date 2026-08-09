@@ -1,0 +1,181 @@
+const express = require('express');
+const db = require('../db');
+
+const router = express.Router();
+
+function csvEscape(value) {
+  if (value === null || value === undefined) return '';
+  const str = String(value);
+  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+  return str;
+}
+
+function withExtras(client) {
+  const lastCall = db
+    .prepare(
+      'SELECT type, logged_at FROM call_logs WHERE client_id = ? ORDER BY logged_at DESC, id DESC LIMIT 1'
+    )
+    .get(client.id);
+  return {
+    ...client,
+    last_contact: lastCall ? { type: lastCall.type, logged_at: lastCall.logged_at } : null,
+  };
+}
+
+router.get('/export.csv', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT c.*, s.name AS stage_name, p.company_name AS referred_by_company, p.contact_name AS referred_by_contact
+       FROM clients c
+       JOIN pipeline_stages s ON s.id = c.stage_id
+       LEFT JOIN partners p ON p.id = c.referred_by_partner_id
+       ORDER BY s.position, c.name`
+    )
+    .all();
+
+  const header = [
+    'Name', 'Phone', 'Email', 'Budget', 'Stage', 'Status',
+    'Next Action', 'Next Action Date', 'Referred By', 'Referral Fee Note', 'Notes',
+  ];
+  const lines = [header.join(',')];
+  for (const r of rows) {
+    const referredBy = r.referred_by_company || r.referred_by_contact
+      ? [r.referred_by_company, r.referred_by_contact].filter(Boolean).join(' - ')
+      : '';
+    lines.push([
+      csvEscape(r.name),
+      csvEscape(r.phone),
+      csvEscape(r.email),
+      csvEscape(r.budget_label),
+      csvEscape(r.stage_name),
+      csvEscape(r.status),
+      csvEscape(r.next_action_label),
+      csvEscape(r.next_action_date),
+      csvEscape(referredBy),
+      csvEscape(r.referral_fee_note),
+      csvEscape(r.notes),
+    ].join(','));
+  }
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="clients.csv"');
+  res.send(lines.join('\n'));
+});
+
+router.get('/', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT c.*, s.name AS stage_name, s.position AS stage_position,
+              p.company_name AS referred_by_company, p.contact_name AS referred_by_contact
+       FROM clients c
+       JOIN pipeline_stages s ON s.id = c.stage_id
+       LEFT JOIN partners p ON p.id = c.referred_by_partner_id
+       ORDER BY s.position, c.name`
+    )
+    .all();
+  res.json(rows.map(withExtras));
+});
+
+router.post('/', (req, res) => {
+  const {
+    name, phone, email, budget_label, stage_id, status,
+    next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, notes,
+  } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+
+  let resolvedStageId = stage_id;
+  if (!resolvedStageId) {
+    const first = db
+      .prepare('SELECT id FROM pipeline_stages WHERE pipeline = ? ORDER BY position LIMIT 1')
+      .get('client');
+    resolvedStageId = first ? first.id : null;
+  }
+
+  const info = db
+    .prepare(
+      `INSERT INTO clients
+        (name, phone, email, budget_label, stage_id, status, next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, notes)
+       VALUES (@name, @phone, @email, @budget_label, @stage_id, @status, @next_action_label, @next_action_date, @referred_by_partner_id, @referral_fee_note, @notes)`
+    )
+    .run({
+      name: name.trim(),
+      phone: phone || null,
+      email: email || null,
+      budget_label: budget_label || null,
+      stage_id: resolvedStageId,
+      status: status || 'cold',
+      next_action_label: next_action_label || null,
+      next_action_date: next_action_date || null,
+      referred_by_partner_id: referred_by_partner_id || null,
+      referral_fee_note: referral_fee_note || null,
+      notes: notes || null,
+    });
+
+  const created = db.prepare('SELECT * FROM clients WHERE id = ?').get(info.lastInsertRowid);
+  res.status(201).json(withExtras(created));
+});
+
+router.patch('/:id', (req, res) => {
+  const existing = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+
+  const fields = [
+    'name', 'phone', 'email', 'budget_label', 'status',
+    'next_action_label', 'next_action_date', 'referred_by_partner_id', 'referral_fee_note', 'notes',
+  ];
+  const updates = {};
+  for (const f of fields) {
+    if (f in req.body) updates[f] = req.body[f] === '' ? null : req.body[f];
+  }
+  if (Object.keys(updates).length === 0) {
+    return res.json(withExtras(existing));
+  }
+
+  const setClause = Object.keys(updates).map((f) => `${f} = @${f}`).join(', ');
+  db.prepare(`UPDATE clients SET ${setClause}, updated_at = datetime('now') WHERE id = @id`)
+    .run({ ...updates, id: req.params.id });
+
+  const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  res.json(withExtras(updated));
+});
+
+router.patch('/:id/move', (req, res) => {
+  const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!client) return res.status(404).json({ error: 'not found' });
+
+  const currentStage = db.prepare('SELECT * FROM pipeline_stages WHERE id = ?').get(client.stage_id);
+  const { direction, stage_id } = req.body;
+
+  let targetStage;
+  if (stage_id) {
+    targetStage = db.prepare('SELECT * FROM pipeline_stages WHERE id = ? AND pipeline = ?').get(stage_id, currentStage.pipeline);
+  } else if (direction === 'next' || direction === 'back') {
+    const cmp = direction === 'next' ? '>' : '<';
+    const order = direction === 'next' ? 'ASC' : 'DESC';
+    targetStage = db
+      .prepare(
+        `SELECT * FROM pipeline_stages WHERE pipeline = ? AND position ${cmp} ? ORDER BY position ${order} LIMIT 1`
+      )
+      .get(currentStage.pipeline, currentStage.position);
+  }
+
+  if (!targetStage) {
+    return res.status(400).json({ error: 'no target stage (already at boundary or invalid stage)' });
+  }
+
+  db.prepare("UPDATE clients SET stage_id = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(targetStage.id, client.id);
+
+  const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(client.id);
+  res.json(withExtras(updated));
+});
+
+router.delete('/:id', (req, res) => {
+  db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
+  res.status(204).end();
+});
+
+module.exports = router;
