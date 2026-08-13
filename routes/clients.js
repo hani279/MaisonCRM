@@ -29,6 +29,7 @@ router.get('/export.csv', (req, res) => {
        FROM clients c
        JOIN pipeline_stages s ON s.id = c.stage_id
        LEFT JOIN partners p ON p.id = c.referred_by_partner_id
+       WHERE c.archived_at IS NULL
        ORDER BY s.position, c.name`
     )
     .all();
@@ -63,6 +64,7 @@ router.get('/export.csv', (req, res) => {
 });
 
 router.get('/', (req, res) => {
+  const wantArchived = req.query.archived === '1' || req.query.archived === 'true';
   const rows = db
     .prepare(
       `SELECT c.*, s.name AS stage_name, s.position AS stage_position,
@@ -70,6 +72,7 @@ router.get('/', (req, res) => {
        FROM clients c
        JOIN pipeline_stages s ON s.id = c.stage_id
        LEFT JOIN partners p ON p.id = c.referred_by_partner_id
+       WHERE c.archived_at IS ${wantArchived ? 'NOT NULL' : 'NULL'}
        ORDER BY s.position, c.name`
     )
     .all();
@@ -170,6 +173,28 @@ router.patch('/:id/move', (req, res) => {
     .run(targetStage.id, client.id);
 
   const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(client.id);
+  res.json(withExtras(updated));
+});
+
+router.patch('/:id/archive', (req, res) => {
+  const existing = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+
+  db.prepare("UPDATE clients SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ?")
+    .run(req.params.id);
+
+  const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  res.json(withExtras(updated));
+});
+
+router.patch('/:id/restore', (req, res) => {
+  const existing = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+
+  db.prepare("UPDATE clients SET archived_at = NULL, updated_at = datetime('now') WHERE id = ?")
+    .run(req.params.id);
+
+  const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   res.json(withExtras(updated));
 });
 

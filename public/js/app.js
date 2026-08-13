@@ -1,7 +1,10 @@
 const state = {
+  page: 'pipeline', // 'pipeline' | 'settings'
   pipeline: 'client',
+  clientView: 'board', // 'board' | 'completed' | 'archived'
   stages: [],
   clients: [],
+  archivedClients: [],
   partners: [],
   search: '',
   lastTouchedId: null,
@@ -51,6 +54,10 @@ async function loadClients() {
   state.clients = await api('/api/clients');
 }
 
+async function loadArchivedClients() {
+  state.archivedClients = await api('/api/clients?archived=1');
+}
+
 async function loadPartners() {
   state.partners = await api('/api/partners');
 }
@@ -58,7 +65,9 @@ async function loadPartners() {
 async function refreshAll() {
   await loadStages();
   if (state.pipeline === 'client') {
-    await Promise.all([loadClients(), loadPartners()]);
+    const loads = [loadClients(), loadPartners()];
+    if (state.clientView === 'archived') loads.push(loadArchivedClients());
+    await Promise.all(loads);
   } else {
     await loadPartners();
   }
@@ -67,37 +76,97 @@ async function refreshAll() {
 
 // ---------- Rendering ----------
 
-function render() {
-  const isClient = state.pipeline === 'client';
-  el('pageTitle').textContent = isClient
-    ? 'Maisons Buyers Agency — Client Pipeline'
-    : 'Maisons Buyers Agency — Referred Partners';
-  el('pageSubtitle').textContent = isClient
-    ? 'Track clients from Engage through to Settlement'
-    : 'Track referral relationships and fee arrangements';
-  el('addBtn').textContent = isClient ? '+ Add Client' : '+ Add Partner';
+const VIEW_COPY = {
+  board: ['Client Pipeline', ''],
+  completed: ['Completed Clients', ''],
+  archived: ['Archived Clients', ''],
+};
 
-  const records = isClient ? state.clients : state.partners;
-  const q = state.search.trim().toLowerCase();
-  const filtered = q
-    ? records.filter((r) => {
-        const haystack = isClient
-          ? [r.name, r.phone, r.email, r.budget_label].join(' ')
-          : [r.company_name, r.contact_name, r.mobile, r.email].join(' ');
-        return haystack.toLowerCase().includes(q);
-      })
-    : records;
+function setPageHeader(title, subtitle) {
+  el('pageTitle').textContent = title;
+  el('pageSubtitle').textContent = subtitle || '';
+  el('pageSubtitle').classList.toggle('hidden', !subtitle);
+}
 
-  el('totalCount').textContent = `${filtered.length} ${isClient ? 'clients' : 'partners'} total`;
-
+function renderKanban(records, isClient) {
+  el('board').classList.remove('hidden');
+  el('listView').classList.add('hidden');
   const board = el('board');
   board.innerHTML = '';
   state.stages.forEach((stage, i) => {
-    const stageRecords = filtered.filter((r) => r.stage_id === stage.id);
+    const stageRecords = records.filter((r) => r.stage_id === stage.id);
     board.appendChild(renderColumn(stage, i, stageRecords, isClient));
   });
+}
 
+function render() {
+  const isClient = state.pipeline === 'client';
+  if (!isClient) state.clientView = 'board';
+
+  el('clientViewTabs').classList.toggle('hidden', !isClient);
+  document.querySelectorAll('.view-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === state.clientView);
+  });
+
+  const q = state.search.trim().toLowerCase();
+
+  if (!isClient) {
+    setPageHeader('Referred Partners', '');
+    el('addBtn').textContent = '+ Add Partner';
+
+    const filtered = q
+      ? state.partners.filter((r) => [r.company_name, r.contact_name, r.mobile, r.email].join(' ').toLowerCase().includes(q))
+      : state.partners;
+    renderKanban(filtered, false);
+    animateTouchedCard();
+    return;
+  }
+
+  const [title, subtitle] = VIEW_COPY[state.clientView];
+  setPageHeader(title, subtitle);
+  el('addBtn').textContent = '+ Add Client';
+
+  const matchesSearch = (c) => [c.name, c.phone, c.email, c.budget_label].join(' ').toLowerCase().includes(q);
+
+  if (state.clientView === 'board') {
+    const filtered = q ? state.clients.filter(matchesSearch) : state.clients;
+    renderKanban(filtered, true);
+    animateTouchedCard();
+    return;
+  }
+
+  el('board').classList.add('hidden');
+  el('listView').classList.remove('hidden');
+
+  if (state.clientView === 'completed') {
+    const lastStage = state.stages[state.stages.length - 1];
+    let filtered = lastStage ? state.clients.filter((c) => c.stage_id === lastStage.id) : [];
+    if (q) filtered = filtered.filter(matchesSearch);
+    renderListView(filtered, 'completed');
+    animateTouchedCard();
+    return;
+  }
+
+  const filtered = q ? state.archivedClients.filter(matchesSearch) : state.archivedClients;
+  renderListView(filtered, 'archived');
   animateTouchedCard();
+}
+
+function renderListView(records, mode) {
+  const container = el('listView');
+  container.innerHTML = '';
+
+  if (records.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-column';
+    empty.textContent = mode === 'archived' ? 'No archived clients' : 'No completed clients yet';
+    container.appendChild(empty);
+    return;
+  }
+
+  records.forEach((client) => {
+    container.appendChild(mode === 'archived' ? renderArchivedClientCard(client) : renderCompletedClientCard(client));
+  });
 }
 
 function renderColumn(stage, index, records, isClient) {
@@ -132,6 +201,15 @@ function renderColumn(stage, index, records, isClient) {
   return col;
 }
 
+// Makes the whole card open the edit modal, except clicks on an action button
+// inside it (Back/Next/Log Call/Archive/Restore/Delete keep their own behavior).
+function bindCardOpensEdit(card, onEdit) {
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('button')) return;
+    onEdit();
+  });
+}
+
 function renderClientCard(client, stageIndex) {
   const card = document.createElement('div');
   card.className = 'card';
@@ -150,7 +228,7 @@ function renderClientCard(client, stageIndex) {
 
   card.innerHTML = `
     <div class="card-top">
-      <p class="card-name" data-action="edit">${escapeHtml(client.name)}</p>
+      <p class="card-name">${escapeHtml(client.name)}</p>
       <span class="status-dot status-${client.status}" title="${client.status}"></span>
     </div>
     <div class="card-meta">${escapeHtml(metaParts)}</div>
@@ -163,7 +241,7 @@ function renderClientCard(client, stageIndex) {
     </div>
   `;
 
-  card.querySelector('[data-action="edit"]').addEventListener('click', () => openClientModal(client));
+  bindCardOpensEdit(card, () => openClientModal(client));
   card.querySelector('[data-action="back"]').addEventListener('click', () => moveClient(client.id, 'back'));
   card.querySelector('[data-action="next"]').addEventListener('click', () => moveClient(client.id, 'next'));
   card.querySelector('[data-action="log-call"]').addEventListener('click', () => openCallModal(client.id));
@@ -182,7 +260,7 @@ function renderPartnerCard(partner, stageIndex) {
 
   card.innerHTML = `
     <div class="card-top">
-      <p class="card-name" data-action="edit">${escapeHtml(partner.company_name || partner.contact_name)}</p>
+      <p class="card-name">${escapeHtml(partner.company_name || partner.contact_name)}</p>
     </div>
     <div class="card-meta">${escapeHtml(partner.contact_name)}${metaParts ? ' · ' + escapeHtml(metaParts) : ''}</div>
     <div class="partner-count">${partner.referred_client_count} client${partner.referred_client_count === 1 ? '' : 's'} referred</div>
@@ -192,9 +270,68 @@ function renderPartnerCard(partner, stageIndex) {
     </div>
   `;
 
-  card.querySelector('[data-action="edit"]').addEventListener('click', () => openPartnerModal(partner));
+  bindCardOpensEdit(card, () => openPartnerModal(partner));
   card.querySelector('[data-action="back"]').addEventListener('click', () => movePartner(partner.id, 'back'));
   card.querySelector('[data-action="next"]').addEventListener('click', () => movePartner(partner.id, 'next'));
+
+  return card;
+}
+
+function renderCompletedClientCard(client) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.recordId = client.id;
+
+  const metaParts = [client.phone, client.budget_label].filter(Boolean).join(' · ');
+  const lastContact = client.last_contact
+    ? `<div class="last-contact">Last contact: ${callTypeLabel(client.last_contact.type)} · ${formatRelative(client.last_contact.logged_at)}</div>`
+    : '';
+
+  card.innerHTML = `
+    <div class="card-top">
+      <p class="card-name">${escapeHtml(client.name)}</p>
+      <span class="status-dot status-${client.status}" title="${client.status}"></span>
+    </div>
+    <div class="card-meta">${escapeHtml(metaParts)}</div>
+    ${lastContact}
+    <div class="card-actions">
+      <button class="btn btn-secondary btn-tiny" data-action="back">&larr; Back</button>
+      <button class="card-icon-btn" data-action="log-call" title="Log call/text/voicemail">☎</button>
+      <button class="btn btn-secondary btn-tiny" data-action="archive">Archive</button>
+    </div>
+  `;
+
+  bindCardOpensEdit(card, () => openClientModal(client));
+  card.querySelector('[data-action="back"]').addEventListener('click', () => moveClient(client.id, 'back'));
+  card.querySelector('[data-action="log-call"]').addEventListener('click', () => openCallModal(client.id));
+  card.querySelector('[data-action="archive"]').addEventListener('click', () => archiveClient(client.id));
+
+  return card;
+}
+
+function renderArchivedClientCard(client) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.recordId = client.id;
+
+  const metaParts = [client.phone, client.budget_label].filter(Boolean).join(' · ');
+
+  card.innerHTML = `
+    <div class="card-top">
+      <p class="card-name">${escapeHtml(client.name)}</p>
+      <span class="status-dot status-${client.status}" title="${client.status}"></span>
+    </div>
+    <div class="card-meta">${escapeHtml(metaParts)}</div>
+    <div class="last-contact">Archived ${formatRelative(client.archived_at)}</div>
+    <div class="card-actions">
+      <button class="btn btn-add btn-tiny" data-action="restore">Restore</button>
+      <button class="btn btn-danger btn-tiny" data-action="delete">Delete</button>
+    </div>
+  `;
+
+  bindCardOpensEdit(card, () => openClientModal(client));
+  card.querySelector('[data-action="restore"]').addEventListener('click', () => restoreClient(client.id));
+  card.querySelector('[data-action="delete"]').addEventListener('click', () => deleteArchivedClient(client.id));
 
   return card;
 }
@@ -251,7 +388,55 @@ async function movePartner(id, direction) {
   render();
 }
 
+// ---------- Archive / restore ----------
+
+async function archiveClient(id) {
+  await api(`/api/clients/${id}/archive`, { method: 'PATCH' });
+  await loadClients();
+  render();
+}
+
+async function restoreClient(id) {
+  await api(`/api/clients/${id}/restore`, { method: 'PATCH' });
+  state.clientView = 'board';
+  state.lastTouchedId = id;
+  await loadClients();
+  render();
+}
+
+async function deleteArchivedClient(id) {
+  if (!confirm('Permanently delete this client? This cannot be undone.')) return;
+  await api(`/api/clients/${id}`, { method: 'DELETE' });
+  await loadArchivedClients();
+  render();
+}
+
+async function toggleArchiveFromModal() {
+  const id = el('recordId').value;
+  if (!id) return;
+  const wasArchived = modalClientArchived;
+  const endpoint = wasArchived ? 'restore' : 'archive';
+  await api(`/api/clients/${id}/${endpoint}`, { method: 'PATCH' });
+
+  if (wasArchived) {
+    // Restoring should always land you back on the live board, not the now-empty Archived tab.
+    state.clientView = 'board';
+    state.lastTouchedId = Number(id);
+    await loadClients();
+  } else {
+    await Promise.all([
+      loadClients(),
+      state.clientView === 'archived' ? loadArchivedClients() : Promise.resolve(null),
+    ]);
+  }
+
+  closeModal('recordModal');
+  render();
+}
+
 // ---------- Add/Edit modal ----------
+
+let modalClientArchived = false;
 
 function populateReferredByOptions() {
   const select = el('f_referred_by_partner_id');
@@ -289,6 +474,11 @@ function openClientModal(client) {
   el('f_notes').value = client?.notes || '';
 
   el('deleteRecordBtn').classList.toggle('hidden', !client);
+
+  modalClientArchived = !!(client && client.archived_at);
+  el('archiveRecordBtn').textContent = modalClientArchived ? 'Restore' : 'Archive';
+  el('archiveRecordBtn').classList.toggle('hidden', !client);
+
   openModal('recordModal');
 }
 
@@ -308,6 +498,7 @@ function openPartnerModal(partner) {
   el('p_notes').value = partner?.notes || '';
 
   el('deleteRecordBtn').classList.toggle('hidden', !partner);
+  el('archiveRecordBtn').classList.add('hidden');
   openModal('recordModal');
 }
 
@@ -362,6 +553,7 @@ async function deleteRecord() {
   if (type === 'client') {
     await api(`/api/clients/${id}`, { method: 'DELETE' });
     await loadClients();
+    if (state.clientView === 'archived') await loadArchivedClients();
   } else {
     await api(`/api/partners/${id}`, { method: 'DELETE' });
     await loadPartners();
@@ -496,6 +688,159 @@ function positionToggleIndicator(animateMotion) {
   });
 }
 
+// ---------- Settings page ----------
+
+function setPage(page) {
+  state.page = page;
+  const isSettings = page === 'settings';
+
+  el('settingsBtn').textContent = isSettings ? '← Back to Pipeline' : '⚙ Settings';
+  el('addBtn').classList.toggle('hidden', isSettings);
+  el('pipelineToggle').classList.toggle('hidden', isSettings);
+  el('toolbar').classList.toggle('hidden', isSettings);
+  el('settingsView').classList.toggle('hidden', !isSettings);
+
+  if (isSettings) {
+    el('clientViewTabs').classList.add('hidden');
+    el('board').classList.add('hidden');
+    el('listView').classList.add('hidden');
+    setPageHeader('Settings', '');
+    loadSettingsPanel();
+  } else {
+    render();
+  }
+}
+
+async function loadSettingsPanel() {
+  el('importMapping').classList.add('hidden');
+  el('importResult').classList.add('hidden');
+  el('importFileInput').value = '';
+  el('importFileName').textContent = '';
+  el('backupStatus').textContent = '';
+
+  try {
+    const settings = await api('/api/settings');
+    el('backupFolderInput').value = settings.backupFolder || '';
+    el('backupStatus').textContent = settings.lastBackupAt
+      ? `Last backup: ${formatRelative(settings.lastBackupAt)}`
+      : 'No backups yet.';
+  } catch (err) {
+    el('backupStatus').textContent = 'Could not load settings: ' + err.message;
+  }
+}
+
+let importCsvText = '';
+
+async function handleImportFileChosen(file) {
+  el('importFileName').textContent = file.name;
+  el('importResult').classList.add('hidden');
+  importCsvText = await file.text();
+
+  let data;
+  try {
+    data = await api('/api/clients/import/parse', {
+      method: 'POST',
+      body: JSON.stringify({ csvText: importCsvText }),
+    });
+  } catch (err) {
+    alert('Could not read that CSV: ' + err.message);
+    return;
+  }
+
+  populateImportMappingSelects(data.headers, data.suggested);
+  renderImportPreview(data.headers, data.sampleRows);
+  el('importRowCount').textContent = `${data.rowCount} row${data.rowCount === 1 ? '' : 's'} found`;
+  el('importMapping').classList.remove('hidden');
+}
+
+function populateImportMappingSelects(headers, suggested) {
+  const fields = [
+    ['map_nameCol', 'nameCol'],
+    ['map_lastNameCol', 'lastNameCol'],
+    ['map_phoneCol', 'phoneCol'],
+    ['map_emailCol', 'emailCol'],
+    ['map_budgetCol', 'budgetCol'],
+    ['map_notesCol', 'notesCol'],
+  ];
+  const options = '<option value="">— None —</option>' +
+    headers.map((h) => `<option value="${escapeHtml(h)}">${escapeHtml(h)}</option>`).join('');
+
+  fields.forEach(([selectId, key]) => {
+    const select = el(selectId);
+    select.innerHTML = options;
+    select.value = suggested[key] || '';
+  });
+}
+
+function renderImportPreview(headers, rows) {
+  const table = el('importPreviewTable');
+  if (rows.length === 0) { table.innerHTML = ''; return; }
+  const headRow = `<tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join('')}</tr>`;
+  const bodyRows = rows
+    .map((r) => `<tr>${headers.map((h) => `<td>${escapeHtml(r[h])}</td>`).join('')}</tr>`)
+    .join('');
+  table.innerHTML = `<thead>${headRow}</thead><tbody>${bodyRows}</tbody>`;
+}
+
+async function commitImport() {
+  const map = {
+    nameCol: el('map_nameCol').value,
+    lastNameCol: el('map_lastNameCol').value,
+    phoneCol: el('map_phoneCol').value,
+    emailCol: el('map_emailCol').value,
+    budgetCol: el('map_budgetCol').value,
+    notesCol: el('map_notesCol').value,
+  };
+  if (!map.nameCol && !map.lastNameCol) {
+    alert('Pick at least a name column before importing.');
+    return;
+  }
+
+  el('commitImportBtn').disabled = true;
+  try {
+    const result = await api('/api/clients/import/commit', {
+      method: 'POST',
+      body: JSON.stringify({ csvText: importCsvText, map }),
+    });
+    el('importResult').classList.remove('hidden');
+    el('importResult').textContent =
+      `Imported ${result.imported} client${result.imported === 1 ? '' : 's'}` +
+      (result.skipped ? `, skipped ${result.skipped} row${result.skipped === 1 ? '' : 's'} with no name.` : '.');
+    el('importMapping').classList.add('hidden');
+    el('importFileInput').value = '';
+    el('importFileName').textContent = '';
+  } catch (err) {
+    alert('Import failed: ' + err.message);
+  } finally {
+    el('commitImportBtn').disabled = false;
+  }
+}
+
+async function saveBackupFolder() {
+  try {
+    await api('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ backupFolder: el('backupFolderInput').value }),
+    });
+    el('backupStatus').textContent = 'Backup folder saved.';
+  } catch (err) {
+    el('backupStatus').textContent = 'Could not save: ' + err.message;
+  }
+}
+
+async function runBackupNow() {
+  el('backupNowBtn').disabled = true;
+  el('backupStatus').textContent = 'Backing up…';
+  try {
+    const result = await api('/api/settings/backup', { method: 'POST' });
+    el('backupStatus').textContent = `Backed up just now to ${result.path}`;
+  } catch (err) {
+    el('backupStatus').textContent = 'Backup failed: ' + err.message;
+  } finally {
+    el('backupNowBtn').disabled = false;
+  }
+}
+
 // ---------- Init ----------
 
 function initEventListeners() {
@@ -509,9 +854,22 @@ function initEventListeners() {
     render();
   });
 
-  el('exportBtn').addEventListener('click', () => {
+  el('settingsBtn').addEventListener('click', () => {
+    setPage(state.page === 'settings' ? 'pipeline' : 'settings');
+  });
+
+  el('settingsExportBtn').addEventListener('click', () => {
     window.location.href = '/api/clients/export.csv';
   });
+
+  el('importFileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) handleImportFileChosen(file);
+  });
+
+  el('commitImportBtn').addEventListener('click', commitImport);
+  el('saveBackupFolderBtn').addEventListener('click', saveBackupFolder);
+  el('backupNowBtn').addEventListener('click', runBackupNow);
 
   el('pipelineToggle').addEventListener('click', async (e) => {
     const btn = e.target.closest('.toggle-btn');
@@ -520,9 +878,18 @@ function initEventListeners() {
     btn.classList.add('active');
     positionToggleIndicator(true);
     state.pipeline = btn.dataset.pipeline;
+    state.clientView = 'board';
     state.search = '';
     el('searchInput').value = '';
     await refreshAll();
+  });
+
+  el('clientViewTabs').addEventListener('click', async (e) => {
+    const btn = e.target.closest('.view-tab');
+    if (!btn || btn.dataset.view === state.clientView) return;
+    state.clientView = btn.dataset.view;
+    if (state.clientView === 'archived') await loadArchivedClients();
+    render();
   });
 
   window.addEventListener('resize', () => positionToggleIndicator(false));
@@ -539,6 +906,7 @@ function initEventListeners() {
   el('recordForm').addEventListener('submit', submitRecordForm);
   el('callForm').addEventListener('submit', submitCallForm);
   el('deleteRecordBtn').addEventListener('click', deleteRecord);
+  el('archiveRecordBtn').addEventListener('click', toggleArchiveFromModal);
 }
 
 initEventListeners();
@@ -547,3 +915,7 @@ refreshAll().catch((err) => {
   console.error(err);
   alert('Failed to load data: ' + err.message);
 });
+
+api('/api/meta')
+  .then((meta) => el('demoBadge').classList.toggle('hidden', !meta.demo))
+  .catch(() => {});

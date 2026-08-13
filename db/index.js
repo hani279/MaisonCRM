@@ -13,6 +13,16 @@ db.pragma('foreign_keys = ON');
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 db.exec(schema);
 
+function ensureColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!columns.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+// Migration for databases created before archiving existed.
+ensureColumn('clients', 'archived_at', 'TEXT DEFAULT NULL');
+
 const CLIENT_STAGES = [
   'Initial Consultation',
   'Engagement & Agreement',
@@ -54,5 +64,12 @@ function seedStages(pipeline, names) {
 
 seedStages('client', CLIENT_STAGES);
 seedStages('partner', PARTNER_STAGES);
+
+// Demo deployments only (Render's DEMO_SEED=true) — never runs against a real,
+// already-in-use database, since it's gated by both the env var and an empty
+// clients table. See db/seed-demo.js for what it inserts.
+if (process.env.DEMO_SEED === 'true') {
+  require('./seed-demo').seedDemoData(db);
+}
 
 module.exports = db;

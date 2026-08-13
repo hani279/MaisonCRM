@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS clients (
   referred_by_partner_id INTEGER REFERENCES partners(id) ON DELETE SET NULL,
   referral_fee_note TEXT,
   notes TEXT,
+  archived_at TEXT DEFAULT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -41,6 +42,11 @@ CREATE TABLE IF NOT EXISTS call_logs (
   note TEXT,
   logged_at TEXT NOT NULL DEFAULT (datetime('now')),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_clients_stage ON clients(stage_id);

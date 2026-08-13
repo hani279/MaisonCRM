@@ -3,31 +3,102 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Maisons Buyers Agency — CRM</title>
+<title>Maisons Buyers Agency: CRM</title>
 <link rel="stylesheet" href="css/styles.css" />
 </head>
 <body>
 
 <header class="topbar">
   <div class="topbar-title">
-    <h1 id="pageTitle">Maisons Buyers Agency — Client Pipeline</h1>
-    <p id="pageSubtitle">Track clients from Engage through to Settlement</p>
+    <div class="brand-lockup">
+      <img src="images/maisons-logo-header.png" alt="Maisons" class="brand-logo" />
+      <h1 id="pageTitle">Client Pipeline</h1>
+      <span id="demoBadge" class="demo-badge hidden">Demo</span>
+    </div>
+    <p id="pageSubtitle" class="hidden"></p>
   </div>
-  <button id="addBtn" class="btn btn-add">+ Add Client</button>
+  <div class="topbar-actions">
+    <div class="pipeline-toggle" id="pipelineToggle">
+      <span class="toggle-indicator" id="toggleIndicator"></span>
+      <button class="toggle-btn active" data-pipeline="client">Clients</button>
+      <button class="toggle-btn" data-pipeline="partner">Referral Partners</button>
+    </div>
+    <button id="settingsBtn" class="btn btn-secondary">&#9881; Settings</button>
+    <button id="addBtn" class="btn btn-add">+ Add Client</button>
+  </div>
 </header>
 
-<div class="toolbar">
+<div class="toolbar" id="toolbar">
   <input id="searchInput" type="text" placeholder="Search clients..." class="search-input" />
-  <div class="pipeline-toggle" id="pipelineToggle">
-    <span class="toggle-indicator" id="toggleIndicator"></span>
-    <button class="toggle-btn active" data-pipeline="client">Clients</button>
-    <button class="toggle-btn" data-pipeline="partner">Referral Partners</button>
+  <div class="view-tabs" id="clientViewTabs">
+    <button class="view-tab active" data-view="board">Board</button>
+    <button class="view-tab" data-view="completed">Completed</button>
+    <button class="view-tab" data-view="archived">Archived</button>
   </div>
-  <button id="exportBtn" class="btn btn-secondary">Export CSV</button>
-  <span id="totalCount" class="total-count"></span>
 </div>
 
 <main id="board" class="board"></main>
+<div id="listView" class="list-view hidden"></div>
+
+<div id="settingsView" class="settings-view hidden">
+
+  <section class="settings-section">
+    <h2>Export</h2>
+    <p>Download every current client as a CSV file — useful for a quick spreadsheet copy or sharing with someone outside the app.</p>
+    <button id="settingsExportBtn" class="btn btn-add">Export CSV</button>
+  </section>
+
+  <section class="settings-section">
+    <h2>Import clients</h2>
+    <p>Import clients from a CSV export (e.g. GoHighLevel, another CRM, or a spreadsheet). Not sure of the format? Start from the template below.</p>
+    <div class="settings-row">
+      <a class="btn btn-secondary" href="/api/clients/import/template.csv" download>Download CSV template</a>
+      <label class="btn btn-secondary file-input-label">
+        Choose CSV file
+        <input type="file" id="importFileInput" accept=".csv" hidden />
+      </label>
+      <span id="importFileName" class="text-muted"></span>
+    </div>
+
+    <div id="importMapping" class="import-mapping hidden">
+      <p class="text-muted">Match your CSV's columns to client fields, then review the preview below before importing.</p>
+      <div class="field-group">
+        <label>Name column <select id="map_nameCol"></select></label>
+        <label>Last name column (optional) <select id="map_lastNameCol"></select></label>
+        <label>Phone column <select id="map_phoneCol"></select></label>
+        <label>Email column <select id="map_emailCol"></select></label>
+        <label>Budget column <select id="map_budgetCol"></select></label>
+        <label>Notes column <select id="map_notesCol"></select></label>
+      </div>
+
+      <div class="import-preview-wrap">
+        <table id="importPreviewTable" class="import-preview-table"></table>
+      </div>
+
+      <div class="modal-footer">
+        <span id="importRowCount" class="text-muted"></span>
+        <div class="spacer"></div>
+        <button id="commitImportBtn" class="btn btn-add">Import Clients</button>
+      </div>
+    </div>
+
+    <div id="importResult" class="import-result hidden"></div>
+  </section>
+
+  <section class="settings-section">
+    <h2>Backup</h2>
+    <p>Point this at a folder that OneDrive or iCloud Drive already syncs on this computer. The app just copies the database file there — it doesn't need an account, sign-in, or internet access to do it.</p>
+    <div class="settings-row">
+      <input type="text" id="backupFolderInput" class="search-input" placeholder="e.g. /Users/rob/Library/Mobile Documents/com~apple~CloudDocs/MaisonsCRM Backups" />
+      <button id="saveBackupFolderBtn" class="btn btn-secondary">Save Folder</button>
+    </div>
+    <div class="settings-row">
+      <button id="backupNowBtn" class="btn btn-add">Back Up Now</button>
+      <span id="backupStatus" class="text-muted"></span>
+    </div>
+  </section>
+
+</div>
 
 <!-- Add/Edit Client or Partner modal -->
 <div id="recordModal" class="modal-overlay hidden">
@@ -74,6 +145,7 @@
 
       <div class="modal-footer">
         <button type="button" id="deleteRecordBtn" class="btn btn-danger hidden">Delete</button>
+        <button type="button" id="archiveRecordBtn" class="btn btn-secondary hidden">Archive</button>
         <div class="spacer"></div>
         <button type="button" class="btn btn-secondary" data-close="recordModal">Cancel</button>
         <button type="submit" class="btn btn-add">Save</button>

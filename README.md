@@ -17,25 +17,30 @@ Everything is stored in `data/maisons.db`. There is nothing else to manage — n
 
 ### Backing it up
 
-Two options, use both if you can:
+Open **⚙ Settings** in the app (top right) → **Backup**:
 
-1. **OneDrive (recommended)** — move (or symlink) the whole `maisons-crm` folder into a OneDrive-synced folder on your computer. Every change to `data/maisons.db` will sync automatically, the same as any other file.
-2. **Manual snapshot** — run `npm run backup` any time to copy the current database into `backups/` with a timestamp in the filename, as a second safety net.
+1. Paste in the path to a folder that OneDrive or iCloud Drive already syncs on this computer (e.g. `/Users/rob/Library/Mobile Documents/com~apple~CloudDocs/MaisonsCRM Backups` for iCloud Drive on a Mac) and click **Save Folder**.
+2. Click **Back Up Now** any time to write a timestamped snapshot of the database into that folder. OneDrive/iCloud then syncs it off this computer automatically — the app itself never needs an account, sign-in, or internet access to do this.
 
-## Importing your existing GoHighLevel contacts
+There's also `npm run backup`, which does the same thing but drops the snapshot into the local `backups/` folder — handy as a quick manual safety net alongside the synced one.
 
-1. Export your contacts from GoHighLevel as a CSV.
-2. Open `scripts/import-clients-csv.js` and check the `COLUMN_MAP` object near the top against your CSV's actual column headers (e.g. `Name`, `Phone`, `Email`) — adjust it if your export uses different header names.
-3. Do a dry run first, which prints what would be imported without touching the database:
-   ```bash
-   node scripts/import-clients-csv.js path/to/export.csv --dry-run
-   ```
-4. Once the dry-run output looks right, run it for real:
-   ```bash
-   node scripts/import-clients-csv.js path/to/export.csv
-   ```
+## Importing clients from a CSV
+
+Open **⚙ Settings** → **Import clients**:
+
+1. Not sure of the format? Click **Download CSV template** first.
+2. Click **Choose CSV file** and pick your export (e.g. from GoHighLevel or another CRM).
+3. The app guesses which column is which (Name, Phone, Email, Budget, Notes) — check the dropdowns and the preview table, and correct any that guessed wrong.
+4. Click **Import Clients**.
 
 Imported clients land in the first stage ("Initial Consultation") with status "Cold" — move them along as you review them.
+
+For a very large one-time migration (e.g. ~900 GoHighLevel contacts), the command-line script is still available and does the same thing without needing to click through the UI row by row:
+```bash
+node scripts/import-clients-csv.js path/to/export.csv --dry-run   # preview first
+node scripts/import-clients-csv.js path/to/export.csv             # then run for real
+```
+Its `COLUMN_MAP` (near the top of the file) may need adjusting to match your export's exact header names.
 
 ## What's in Phase 1
 
@@ -45,7 +50,9 @@ Imported clients land in the first stage ("Initial Consultation") with status "C
 - Status color-coding per client: Cold / Engaged / Active-Hot / Settled / Lost (the field is a plain dropdown, easy to relabel later)
 - Referred Partners pipeline with placeholder stages (New Contact → Fee Paid) — rename these any time in `db/index.js`'s `PARTNER_STAGES` list once Robert sends the real ones, then delete `data/maisons.db` and restart, or update the `pipeline_stages` rows directly
 - Linking a client to the partner who referred them, with a fee note field
-- Search, Export CSV, add/edit/delete for both clients and partners
+- Search, add/edit/delete for both clients and partners
+- Archive/Restore for clients, plus dedicated Board / Completed / Archived views so finished and shelved clients don't clutter the live pipeline
+- A Settings page (⚙ top right) for Export CSV, CSV import with column mapping and a downloadable template, and backup-to-a-synced-folder
 
 ## Deliberately deferred to Phase 2
 
