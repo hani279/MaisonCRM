@@ -8,6 +8,13 @@ const state = {
   partners: [],
   search: '',
   lastTouchedId: null,
+  labels: [],
+  filters: {
+    labelIds: new Set(),
+    statuses: new Set(),
+    partnerIds: new Set(),
+  },
+  currentUser: null,
 };
 
 const modalMotion = {};
@@ -20,6 +27,11 @@ async function api(url, opts) {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
+  if (res.status === 401 && !url.startsWith('/api/auth/')) {
+    // Session expired mid-use — bounce back to the login screen instead of a raw error.
+    showAuthScreen('login');
+    throw new Error('Session expired — please sign in again.');
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `Request failed: ${res.status}`);
@@ -62,8 +74,12 @@ async function loadPartners() {
   state.partners = await api('/api/partners');
 }
 
+async function loadLabels() {
+  state.labels = await api('/api/labels');
+}
+
 async function refreshAll() {
-  await loadStages();
+  await Promise.all([loadStages(), loadLabels()]);
   if (state.pipeline === 'client') {
     const loads = [loadClients(), loadPartners()];
     if (state.clientView === 'archived') loads.push(loadArchivedClients());
@@ -99,6 +115,19 @@ function renderKanban(records, isClient) {
   });
 }
 
+function matchesFilters(record, isClient) {
+  const f = state.filters;
+  if (f.labelIds.size > 0) {
+    const recordLabelIds = (record.labels || []).map((l) => l.id);
+    if (!recordLabelIds.some((id) => f.labelIds.has(id))) return false;
+  }
+  if (isClient) {
+    if (f.statuses.size > 0 && !f.statuses.has(record.status)) return false;
+    if (f.partnerIds.size > 0 && !f.partnerIds.has(record.referred_by_partner_id)) return false;
+  }
+  return true;
+}
+
 function render() {
   const isClient = state.pipeline === 'client';
   if (!isClient) state.clientView = 'board';
@@ -107,6 +136,8 @@ function render() {
   document.querySelectorAll('.view-tab').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.view === state.clientView);
   });
+  renderFilterPanelSections();
+  updateFilterBadge();
 
   const q = state.search.trim().toLowerCase();
 
@@ -114,9 +145,8 @@ function render() {
     setPageHeader('Referred Partners', '');
     el('addBtn').textContent = '+ Add Partner';
 
-    const filtered = q
-      ? state.partners.filter((r) => [r.company_name, r.contact_name, r.mobile, r.email].join(' ').toLowerCase().includes(q))
-      : state.partners;
+    const matchesSearch = (r) => [r.company_name, r.contact_name, r.mobile, r.email].join(' ').toLowerCase().includes(q);
+    const filtered = state.partners.filter((r) => (!q || matchesSearch(r)) && matchesFilters(r, false));
     renderKanban(filtered, false);
     animateTouchedCard();
     return;
@@ -129,7 +159,7 @@ function render() {
   const matchesSearch = (c) => [c.name, c.phone, c.email, c.budget_label].join(' ').toLowerCase().includes(q);
 
   if (state.clientView === 'board') {
-    const filtered = q ? state.clients.filter(matchesSearch) : state.clients;
+    const filtered = state.clients.filter((c) => (!q || matchesSearch(c)) && matchesFilters(c, true));
     renderKanban(filtered, true);
     animateTouchedCard();
     return;
@@ -140,16 +170,85 @@ function render() {
 
   if (state.clientView === 'completed') {
     const lastStage = state.stages[state.stages.length - 1];
-    let filtered = lastStage ? state.clients.filter((c) => c.stage_id === lastStage.id) : [];
-    if (q) filtered = filtered.filter(matchesSearch);
+    const filtered = (lastStage ? state.clients.filter((c) => c.stage_id === lastStage.id) : [])
+      .filter((c) => (!q || matchesSearch(c)) && matchesFilters(c, true));
     renderListView(filtered, 'completed');
     animateTouchedCard();
     return;
   }
 
-  const filtered = q ? state.archivedClients.filter(matchesSearch) : state.archivedClients;
+  const filtered = state.archivedClients.filter((c) => (!q || matchesSearch(c)) && matchesFilters(c, true));
   renderListView(filtered, 'archived');
   animateTouchedCard();
+}
+
+// ---------- Filter panel ----------
+
+const STATUS_LABELS = { cold: 'Cold', engaged: 'Engaged', active: 'Active / Hot', settled: 'Settled', lost: 'Lost' };
+
+function renderFilterPanelSections() {
+  const isClient = state.pipeline === 'client';
+  el('filterStatusSection').classList.toggle('hidden', !isClient);
+  el('filterPartnerSection').classList.toggle('hidden', !isClient);
+
+  const labelsList = el('filterLabelsList');
+  labelsList.innerHTML = state.labels.length === 0
+    ? '<span class="text-muted">No labels yet.</span>'
+    : state.labels.map((l) => `
+        <label>
+          <input type="checkbox" data-filter="label" value="${l.id}" ${state.filters.labelIds.has(l.id) ? 'checked' : ''} />
+          <span class="filter-swatch-dot" style="background:${l.color};"></span>
+          ${escapeHtml(l.name)}
+        </label>
+      `).join('');
+
+  if (isClient) {
+    el('filterStatusList').innerHTML = Object.entries(STATUS_LABELS).map(([value, label]) => `
+      <label>
+        <input type="checkbox" data-filter="status" value="${value}" ${state.filters.statuses.has(value) ? 'checked' : ''} />
+        ${label}
+      </label>
+    `).join('');
+
+    const partnerList = el('filterPartnerList');
+    partnerList.innerHTML = state.partners.length === 0
+      ? '<span class="text-muted">No partners yet.</span>'
+      : state.partners.map((p) => `
+          <label>
+            <input type="checkbox" data-filter="partner" value="${p.id}" ${state.filters.partnerIds.has(p.id) ? 'checked' : ''} />
+            ${escapeHtml(p.company_name || p.contact_name)}
+          </label>
+        `).join('');
+  }
+
+  el('filterPanel').querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+    cb.addEventListener('change', handleFilterCheckboxChange);
+  });
+}
+
+function handleFilterCheckboxChange(e) {
+  const type = e.target.dataset.filter;
+  const value = type === 'status' ? e.target.value : Number(e.target.value);
+  const set = type === 'label' ? state.filters.labelIds
+    : type === 'status' ? state.filters.statuses
+    : state.filters.partnerIds;
+  if (e.target.checked) set.add(value); else set.delete(value);
+  render();
+}
+
+function updateFilterBadge() {
+  const count = state.filters.labelIds.size + state.filters.statuses.size + state.filters.partnerIds.size;
+  const badge = el('filterBadge');
+  badge.textContent = String(count);
+  badge.classList.toggle('hidden', count === 0);
+  el('filterBtn').classList.toggle('active', count > 0);
+}
+
+function clearFilters() {
+  state.filters.labelIds.clear();
+  state.filters.statuses.clear();
+  state.filters.partnerIds.clear();
+  render();
 }
 
 function renderListView(records, mode) {
@@ -229,9 +328,9 @@ function renderClientCard(client, stageIndex) {
   card.innerHTML = `
     <div class="card-top">
       <p class="card-name">${escapeHtml(client.name)}</p>
-      <span class="status-dot status-${client.status}" title="${client.status}"></span>
     </div>
     <div class="card-meta">${escapeHtml(metaParts)}</div>
+    ${renderLabelChips(client.labels)}
     ${nextAction}
     ${lastContact}
     <div class="card-actions">
@@ -263,6 +362,7 @@ function renderPartnerCard(partner, stageIndex) {
       <p class="card-name">${escapeHtml(partner.company_name || partner.contact_name)}</p>
     </div>
     <div class="card-meta">${escapeHtml(partner.contact_name)}${metaParts ? ' · ' + escapeHtml(metaParts) : ''}</div>
+    ${renderLabelChips(partner.labels)}
     <div class="partner-count">${partner.referred_client_count} client${partner.referred_client_count === 1 ? '' : 's'} referred</div>
     <div class="card-actions">
       <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst ? 'disabled' : ''}>&larr; Back</button>
@@ -290,9 +390,9 @@ function renderCompletedClientCard(client) {
   card.innerHTML = `
     <div class="card-top">
       <p class="card-name">${escapeHtml(client.name)}</p>
-      <span class="status-dot status-${client.status}" title="${client.status}"></span>
     </div>
     <div class="card-meta">${escapeHtml(metaParts)}</div>
+    ${renderLabelChips(client.labels)}
     ${lastContact}
     <div class="card-actions">
       <button class="btn btn-secondary btn-tiny" data-action="back">&larr; Back</button>
@@ -319,9 +419,9 @@ function renderArchivedClientCard(client) {
   card.innerHTML = `
     <div class="card-top">
       <p class="card-name">${escapeHtml(client.name)}</p>
-      <span class="status-dot status-${client.status}" title="${client.status}"></span>
     </div>
     <div class="card-meta">${escapeHtml(metaParts)}</div>
+    ${renderLabelChips(client.labels)}
     <div class="last-contact">Archived ${formatRelative(client.archived_at)}</div>
     <div class="card-actions">
       <button class="btn btn-add btn-tiny" data-action="restore">Restore</button>
@@ -370,6 +470,14 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function renderLabelChips(labels) {
+  if (!labels || labels.length === 0) return '';
+  const chips = labels
+    .map((l) => `<span class="label-chip" style="background:${l.color}22; color:${l.color};">${escapeHtml(l.name)}</span>`)
+    .join('');
+  return `<div class="card-label-chips">${chips}</div>`;
 }
 
 // ---------- Move actions ----------
@@ -438,6 +546,81 @@ async function toggleArchiveFromModal() {
 
 let modalClientArchived = false;
 
+// ---------- Budget range dropdowns ----------
+
+const BUDGET_MIN = 450000;
+const BUDGET_MAX = 2000000;
+const BUDGET_STEP = 50000;
+let originalBudgetLabel = null;
+
+function budgetSteps() {
+  const values = [];
+  for (let v = BUDGET_MIN; v <= BUDGET_MAX; v += BUDGET_STEP) values.push(v);
+  return values;
+}
+
+function formatMoney(v) {
+  return '$' + v.toLocaleString('en-US');
+}
+
+function populateBudgetSelects() {
+  const fromSelect = el('f_budget_from');
+  fromSelect.innerHTML = '<option value="">— Any —</option>' +
+    budgetSteps().map((v) => `<option value="${v}">${formatMoney(v)}</option>`).join('');
+  updateBudgetToOptions();
+}
+
+// "To" only offers values >= the chosen "From", so you can't build a nonsense range.
+function updateBudgetToOptions() {
+  const fromVal = Number(el('f_budget_from').value) || 0;
+  const toSelect = el('f_budget_to');
+  const current = toSelect.value;
+  const values = budgetSteps().filter((v) => v >= fromVal);
+  toSelect.innerHTML = '<option value="">— No max —</option>' +
+    values.map((v) => `<option value="${v}">${formatMoney(v)}</option>`).join('');
+  if (values.includes(Number(current))) toSelect.value = current;
+}
+
+// Parses "$450,000 - $700,000" / "$700,000+" style labels back into the two
+// dropdowns. Anything else (free text from a CSV import, e.g. "700k") is left
+// unparsed — computeBudgetLabel() then preserves it untouched unless the user
+// actively picks new dropdown values.
+function parseBudgetLabel(label) {
+  if (!label) return null;
+  const steps = new Set(budgetSteps());
+
+  let m = label.match(/^\$?([\d,]+)\s*-\s*\$?([\d,]+)$/);
+  if (m) {
+    const from = Number(m[1].replace(/,/g, ''));
+    const to = Number(m[2].replace(/,/g, ''));
+    if (steps.has(from) && steps.has(to)) return { from, to };
+  }
+
+  m = label.match(/^\$?([\d,]+)\+$/);
+  if (m) {
+    const from = Number(m[1].replace(/,/g, ''));
+    if (steps.has(from)) return { from, to: null };
+  }
+
+  return null;
+}
+
+function setBudgetSelects(label) {
+  const parsed = parseBudgetLabel(label);
+  el('f_budget_from').value = parsed ? parsed.from : '';
+  updateBudgetToOptions();
+  el('f_budget_to').value = parsed && parsed.to ? parsed.to : '';
+}
+
+function computeBudgetLabel() {
+  const fromVal = el('f_budget_from').value;
+  const toVal = el('f_budget_to').value;
+  if (!fromVal && !toVal) return originalBudgetLabel;
+  if (fromVal && toVal) return `${formatMoney(Number(fromVal))} - ${formatMoney(Number(toVal))}`;
+  if (fromVal) return `${formatMoney(Number(fromVal))}+`;
+  return `Up to ${formatMoney(Number(toVal))}`;
+}
+
 function populateReferredByOptions() {
   const select = el('f_referred_by_partner_id');
   const current = select.value;
@@ -449,6 +632,58 @@ function populateReferredByOptions() {
     select.appendChild(opt);
   });
   select.value = current;
+}
+
+// ---------- Label picker (shared by client + partner modals) ----------
+
+let selectedLabelIds = new Set();
+let originalLabelIds = new Set();
+
+function populateLabelPicker(currentLabels) {
+  originalLabelIds = new Set((currentLabels || []).map((l) => l.id));
+  selectedLabelIds = new Set(originalLabelIds);
+
+  const container = el('labelCheckboxes');
+  if (state.labels.length === 0) {
+    container.innerHTML = '<span class="text-muted">No labels yet — create some in Settings.</span>';
+    return;
+  }
+
+  container.innerHTML = state.labels.map((l) => `
+    <button type="button" class="label-chip" data-label-id="${l.id}"
+      style="${selectedLabelIds.has(l.id) ? `background:${l.color}; color:#fff;` : `color:${l.color}; border-color:${l.color}66;`}">
+      ${escapeHtml(l.name)}
+    </button>
+  `).join('');
+
+  container.querySelectorAll('.label-chip').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.labelId);
+      const label = state.labels.find((l) => l.id === id);
+      if (selectedLabelIds.has(id)) {
+        selectedLabelIds.delete(id);
+        btn.style.background = '';
+        btn.style.color = label.color;
+        btn.style.borderColor = `${label.color}66`;
+      } else {
+        selectedLabelIds.add(id);
+        btn.style.background = label.color;
+        btn.style.color = '#fff';
+        btn.style.borderColor = 'transparent';
+      }
+    });
+  });
+}
+
+async function syncRecordLabels(type, id) {
+  const toAdd = [...selectedLabelIds].filter((labelId) => !originalLabelIds.has(labelId));
+  const toRemove = [...originalLabelIds].filter((labelId) => !selectedLabelIds.has(labelId));
+  const base = type === 'client' ? `/api/clients/${id}/labels` : `/api/partners/${id}/labels`;
+
+  await Promise.all([
+    ...toAdd.map((labelId) => api(base, { method: 'POST', body: JSON.stringify({ label_id: labelId }) })),
+    ...toRemove.map((labelId) => api(`${base}/${labelId}`, { method: 'DELETE' })),
+  ]);
 }
 
 function openClientModal(client) {
@@ -465,7 +700,9 @@ function openClientModal(client) {
   el('f_name').value = client?.name || '';
   el('f_phone').value = client?.phone || '';
   el('f_email').value = client?.email || '';
-  el('f_budget_label').value = client?.budget_label || '';
+  originalBudgetLabel = client?.budget_label || null;
+  populateBudgetSelects();
+  setBudgetSelects(client?.budget_label || null);
   el('f_status').value = client?.status || 'cold';
   el('f_next_action_label').value = client?.next_action_label || '';
   el('f_next_action_date').value = client?.next_action_date || '';
@@ -478,6 +715,8 @@ function openClientModal(client) {
   modalClientArchived = !!(client && client.archived_at);
   el('archiveRecordBtn').textContent = modalClientArchived ? 'Restore' : 'Archive';
   el('archiveRecordBtn').classList.toggle('hidden', !client);
+
+  populateLabelPicker(client?.labels);
 
   openModal('recordModal');
 }
@@ -499,6 +738,9 @@ function openPartnerModal(partner) {
 
   el('deleteRecordBtn').classList.toggle('hidden', !partner);
   el('archiveRecordBtn').classList.add('hidden');
+
+  populateLabelPicker(partner?.labels);
+
   openModal('recordModal');
 }
 
@@ -512,7 +754,7 @@ async function submitRecordForm(evt) {
       name: el('f_name').value,
       phone: el('f_phone').value,
       email: el('f_email').value,
-      budget_label: el('f_budget_label').value,
+      budget_label: computeBudgetLabel(),
       status: el('f_status').value,
       next_action_label: el('f_next_action_label').value,
       next_action_date: el('f_next_action_date').value,
@@ -523,6 +765,7 @@ async function submitRecordForm(evt) {
     const saved = id
       ? await api(`/api/clients/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       : await api('/api/clients', { method: 'POST', body: JSON.stringify(payload) });
+    await syncRecordLabels('client', saved.id);
     state.lastTouchedId = saved.id;
     await loadClients();
   } else {
@@ -536,6 +779,7 @@ async function submitRecordForm(evt) {
     const saved = id
       ? await api(`/api/partners/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
       : await api('/api/partners', { method: 'POST', body: JSON.stringify(payload) });
+    await syncRecordLabels('partner', saved.id);
     state.lastTouchedId = saved.id;
     await loadPartners();
   }
@@ -711,22 +955,165 @@ function setPage(page) {
   }
 }
 
-async function loadSettingsPanel() {
+function loadSettingsPanel() {
   el('importMapping').classList.add('hidden');
   el('importResult').classList.add('hidden');
   el('importFileInput').value = '';
   el('importFileName').textContent = '';
-  el('backupStatus').textContent = '';
+
+  renderColorSwatchPicker();
+  renderLabelsList();
+  loadAccountPanel();
+}
+
+// ---------- Settings: Account + Users ----------
+
+function loadAccountPanel() {
+  const user = state.currentUser;
+  if (!user) return;
+
+  el('accountCurrentName').textContent = user.name;
+  el('accountCurrentEmail').textContent = user.email;
+  el('account_name').value = user.name;
+  el('account_email').value = user.email;
+  el('account_password').value = '';
+  el('account_password_confirm').value = '';
+  el('profileResult').classList.add('hidden');
+
+  el('usersSection').classList.toggle('hidden', user.role !== 'admin');
+  if (user.role === 'admin') loadUsersList();
+}
+
+async function saveProfile() {
+  const password = el('account_password').value;
+  const confirmPassword = el('account_password_confirm').value;
+  if (password && password !== confirmPassword) {
+    alert('Passwords do not match.');
+    return;
+  }
+
+  const payload = { name: el('account_name').value, email: el('account_email').value };
+  if (password) payload.password = password;
 
   try {
-    const settings = await api('/api/settings');
-    el('backupFolderInput').value = settings.backupFolder || '';
-    el('backupStatus').textContent = settings.lastBackupAt
-      ? `Last backup: ${formatRelative(settings.lastBackupAt)}`
-      : 'No backups yet.';
+    const updated = await api('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(payload) });
+    state.currentUser = updated;
+    el('accountCurrentName').textContent = updated.name;
+    el('accountCurrentEmail').textContent = updated.email;
+    el('account_password').value = '';
+    el('account_password_confirm').value = '';
+    el('profileResult').textContent = 'Profile updated.';
+    el('profileResult').classList.remove('hidden');
   } catch (err) {
-    el('backupStatus').textContent = 'Could not load settings: ' + err.message;
+    alert('Could not update profile: ' + err.message);
   }
+}
+
+async function logout() {
+  await api('/api/auth/logout', { method: 'POST' });
+  showAuthScreen('login');
+}
+
+async function loadUsersList() {
+  let users;
+  try {
+    users = await api('/api/users');
+  } catch (err) {
+    el('usersList').innerHTML = `<span class="text-muted">${escapeHtml(err.message)}</span>`;
+    return;
+  }
+
+  el('usersList').innerHTML = users.map((u) => `
+    <div class="label-row">
+      ${escapeHtml(u.name)} — ${escapeHtml(u.email)} (${u.role})
+      ${u.id !== state.currentUser.id ? `<button type="button" class="label-delete-btn" data-user-id="${u.id}" title="Delete user">&times;</button>` : ''}
+    </div>
+  `).join('');
+
+  el('usersList').querySelectorAll('.label-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', () => deleteUser(Number(btn.dataset.userId)));
+  });
+}
+
+async function createUser() {
+  const payload = {
+    name: el('newUserName').value,
+    email: el('newUserEmail').value,
+    password: el('newUserPassword').value,
+    role: el('newUserRole').value,
+  };
+  try {
+    await api('/api/users', { method: 'POST', body: JSON.stringify(payload) });
+    el('newUserName').value = '';
+    el('newUserEmail').value = '';
+    el('newUserPassword').value = '';
+    el('newUserRole').value = 'member';
+    await loadUsersList();
+  } catch (err) {
+    alert('Could not create user: ' + err.message);
+  }
+}
+
+async function deleteUser(id) {
+  if (!confirm("Delete this user? They'll no longer be able to sign in.")) return;
+  await api(`/api/users/${id}`, { method: 'DELETE' });
+  await loadUsersList();
+}
+
+// ---------- Settings: Labels management ----------
+
+const LABEL_COLORS = ['#0071e3', '#5e5ce6', '#30d158', '#ff9500', '#ff3b30', '#ff375f', '#00c7be', '#86868b'];
+let newLabelColor = LABEL_COLORS[0];
+
+function renderColorSwatchPicker() {
+  const picker = el('newLabelColorPicker');
+  picker.innerHTML = LABEL_COLORS.map((c) => `
+    <button type="button" class="color-swatch ${c === newLabelColor ? 'selected' : ''}" data-color="${c}" style="background:${c};"></button>
+  `).join('');
+  picker.querySelectorAll('.color-swatch').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      newLabelColor = btn.dataset.color;
+      picker.querySelectorAll('.color-swatch').forEach((b) => b.classList.toggle('selected', b === btn));
+    });
+  });
+}
+
+function renderLabelsList() {
+  const container = el('labelsList');
+  if (state.labels.length === 0) {
+    container.innerHTML = '<span class="text-muted">No labels yet.</span>';
+    return;
+  }
+  container.innerHTML = state.labels.map((l) => `
+    <div class="label-row">
+      <span class="label-swatch-dot" style="background:${l.color};"></span>
+      ${escapeHtml(l.name)}
+      <button type="button" class="label-delete-btn" data-label-id="${l.id}" title="Delete label">&times;</button>
+    </div>
+  `).join('');
+  container.querySelectorAll('.label-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', () => deleteLabel(Number(btn.dataset.labelId)));
+  });
+}
+
+async function createLabel() {
+  const name = el('newLabelName').value.trim();
+  if (!name) { alert('Enter a label name first.'); return; }
+  try {
+    await api('/api/labels', { method: 'POST', body: JSON.stringify({ name, color: newLabelColor }) });
+    el('newLabelName').value = '';
+    await loadLabels();
+    renderLabelsList();
+  } catch (err) {
+    alert('Could not create label: ' + err.message);
+  }
+}
+
+async function deleteLabel(id) {
+  if (!confirm("Delete this label? It'll be removed from every client and partner it's assigned to.")) return;
+  await api(`/api/labels/${id}`, { method: 'DELETE' });
+  await loadLabels();
+  renderLabelsList();
 }
 
 let importCsvText = '';
@@ -816,34 +1203,11 @@ async function commitImport() {
   }
 }
 
-async function saveBackupFolder() {
-  try {
-    await api('/api/settings', {
-      method: 'PUT',
-      body: JSON.stringify({ backupFolder: el('backupFolderInput').value }),
-    });
-    el('backupStatus').textContent = 'Backup folder saved.';
-  } catch (err) {
-    el('backupStatus').textContent = 'Could not save: ' + err.message;
-  }
-}
-
-async function runBackupNow() {
-  el('backupNowBtn').disabled = true;
-  el('backupStatus').textContent = 'Backing up…';
-  try {
-    const result = await api('/api/settings/backup', { method: 'POST' });
-    el('backupStatus').textContent = `Backed up just now to ${result.path}`;
-  } catch (err) {
-    el('backupStatus').textContent = 'Backup failed: ' + err.message;
-  } finally {
-    el('backupNowBtn').disabled = false;
-  }
-}
-
 // ---------- Init ----------
 
 function initEventListeners() {
+  el('f_budget_from').addEventListener('change', updateBudgetToOptions);
+
   el('addBtn').addEventListener('click', () => {
     if (state.pipeline === 'client') openClientModal(null);
     else openPartnerModal(null);
@@ -868,14 +1232,29 @@ function initEventListeners() {
   });
 
   el('commitImportBtn').addEventListener('click', commitImport);
-  el('saveBackupFolderBtn').addEventListener('click', saveBackupFolder);
-  el('backupNowBtn').addEventListener('click', runBackupNow);
+  el('createLabelBtn').addEventListener('click', createLabel);
+  el('saveProfileBtn').addEventListener('click', saveProfile);
+  el('logoutBtn').addEventListener('click', logout);
+  el('createUserBtn').addEventListener('click', createUser);
+
+  el('filterBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    el('filterPanel').classList.toggle('hidden');
+  });
+  document.addEventListener('click', (e) => {
+    const panel = el('filterPanel');
+    if (!panel.classList.contains('hidden') && !e.target.closest('.filter-wrap')) {
+      panel.classList.add('hidden');
+    }
+  });
+  el('clearFiltersBtn').addEventListener('click', clearFilters);
 
   el('pipelineToggle').addEventListener('click', async (e) => {
     const btn = e.target.closest('.toggle-btn');
     if (!btn) return;
     document.querySelectorAll('.toggle-btn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
+    el('pipelineToggle').classList.toggle('is-partner', btn.dataset.pipeline === 'partner');
     positionToggleIndicator(true);
     state.pipeline = btn.dataset.pipeline;
     state.clientView = 'board';
@@ -909,13 +1288,96 @@ function initEventListeners() {
   el('archiveRecordBtn').addEventListener('click', toggleArchiveFromModal);
 }
 
-initEventListeners();
-positionToggleIndicator(false);
-refreshAll().catch((err) => {
-  console.error(err);
-  alert('Failed to load data: ' + err.message);
-});
+// ---------- Auth screen ----------
 
-api('/api/meta')
-  .then((meta) => el('demoBadge').classList.toggle('hidden', !meta.demo))
-  .catch(() => {});
+let authMode = 'login'; // 'login' | 'setup'
+
+function showAuthScreen(mode) {
+  authMode = mode;
+  state.currentUser = null;
+
+  el('authView').classList.remove('hidden');
+  el('topbarActions').classList.add('hidden');
+  el('toolbar').classList.add('hidden');
+  el('clientViewTabs').classList.add('hidden');
+  el('board').classList.add('hidden');
+  el('listView').classList.add('hidden');
+  el('settingsView').classList.add('hidden');
+  el('filterPanel').classList.add('hidden');
+  setPageHeader('Client Pipeline', '');
+
+  el('authTitle').textContent = mode === 'setup' ? 'Create Your Admin Account' : 'Sign In';
+  el('authSubtitle').textContent = mode === 'setup'
+    ? 'Set up the first account for this CRM.'
+    : 'Sign in to continue.';
+  el('authNameField').classList.toggle('hidden', mode !== 'setup');
+  el('auth_name').required = mode === 'setup';
+  el('authSubmitBtn').textContent = mode === 'setup' ? 'Create Account' : 'Sign In';
+  el('authError').classList.add('hidden');
+  el('auth_email').value = '';
+  el('auth_password').value = '';
+
+  el('demoHint').classList.add('hidden');
+  if (mode === 'login') {
+    fetch('/api/meta').then((r) => r.json()).then((meta) => {
+      if (meta.demo) {
+        el('demoHint').textContent = 'Demo login: demo@maisons.example / demo1234';
+        el('demoHint').classList.remove('hidden');
+      }
+    }).catch(() => {});
+  }
+}
+
+async function showApp() {
+  el('authView').classList.add('hidden');
+  el('topbarActions').classList.remove('hidden');
+
+  positionToggleIndicator(false);
+  await refreshAll();
+
+  fetch('/api/meta').then((r) => r.json())
+    .then((meta) => el('demoBadge').classList.toggle('hidden', !meta.demo))
+    .catch(() => {});
+}
+
+async function checkAuthAndInit() {
+  let status;
+  try {
+    status = await fetch('/api/auth/status').then((r) => r.json());
+  } catch (err) {
+    console.error(err);
+    alert('Could not reach the server: ' + err.message);
+    return;
+  }
+
+  if (status.needsSetup) return showAuthScreen('setup');
+  if (!status.authenticated) return showAuthScreen('login');
+
+  state.currentUser = status.user;
+  showApp();
+}
+
+async function submitAuthForm(evt) {
+  evt.preventDefault();
+  el('authError').classList.add('hidden');
+
+  const payload = {
+    email: el('auth_email').value,
+    password: el('auth_password').value,
+  };
+  if (authMode === 'setup') payload.name = el('auth_name').value;
+
+  try {
+    const endpoint = authMode === 'setup' ? '/api/auth/setup' : '/api/auth/login';
+    const user = await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
+    state.currentUser = user;
+    await showApp();
+  } catch (err) {
+    el('authError').textContent = err.message;
+    el('authError').classList.remove('hidden');
+  }
+}
+
+initEventListeners();
+el('authForm').addEventListener('submit', submitAuthForm);
+checkAuthAndInit();

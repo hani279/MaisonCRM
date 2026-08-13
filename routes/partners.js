@@ -7,7 +7,14 @@ function withExtras(partner) {
   const referredCount = db
     .prepare('SELECT COUNT(*) AS c FROM clients WHERE referred_by_partner_id = ?')
     .get(partner.id).c;
-  return { ...partner, referred_client_count: referredCount };
+  const labels = db
+    .prepare(
+      `SELECT l.id, l.name, l.color FROM labels l
+       JOIN partner_labels pl ON pl.label_id = l.id
+       WHERE pl.partner_id = ? ORDER BY l.name`
+    )
+    .all(partner.id);
+  return { ...partner, referred_client_count: referredCount, labels };
 }
 
 router.get('/', (req, res) => {
@@ -105,6 +112,24 @@ router.patch('/:id/move', (req, res) => {
 
   const updated = db.prepare('SELECT * FROM partners WHERE id = ?').get(partner.id);
   res.json(withExtras(updated));
+});
+
+router.post('/:id/labels', (req, res) => {
+  const partner = db.prepare('SELECT id FROM partners WHERE id = ?').get(req.params.id);
+  if (!partner) return res.status(404).json({ error: 'not found' });
+  const label = db.prepare('SELECT id FROM labels WHERE id = ?').get(req.body.label_id);
+  if (!label) return res.status(404).json({ error: 'label not found' });
+
+  db.prepare('INSERT OR IGNORE INTO partner_labels (partner_id, label_id) VALUES (?, ?)')
+    .run(req.params.id, req.body.label_id);
+
+  res.json(withExtras(db.prepare('SELECT * FROM partners WHERE id = ?').get(req.params.id)));
+});
+
+router.delete('/:id/labels/:labelId', (req, res) => {
+  db.prepare('DELETE FROM partner_labels WHERE partner_id = ? AND label_id = ?')
+    .run(req.params.id, req.params.labelId);
+  res.json(withExtras(db.prepare('SELECT * FROM partners WHERE id = ?').get(req.params.id)));
 });
 
 router.delete('/:id', (req, res) => {

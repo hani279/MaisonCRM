@@ -30,15 +30,64 @@ const CLIENT_STAGES = [
   'Property Search',
   'Shortlisting & Inspections',
   'Due Diligence',
-  'Valuation & Pricing Analysis',
   'Negotiation / Auction Bidding',
   'Contract Exchange',
   'Cooling-off / Unconditional',
-  'Finance Finalisation',
   'Pre-Settlement Inspection',
   'Settlement',
-  'Handover',
 ];
+
+// Migration for databases seeded before these stages were removed. Any client
+// still sitting on a removed stage is moved to the nearest surviving stage
+// (forward first, since their progress shouldn't regress; back only if the
+// removed stage was the last one) — then remaining positions are renumbered
+// contiguously so Back/Next navigation stays correct. Safe to run every boot:
+// it's a no-op once the named stages no longer exist.
+function migrateRemoveClientStages(names) {
+  const placeholders = names.map(() => '?').join(',');
+  const toRemove = db
+    .prepare(`SELECT id, position FROM pipeline_stages WHERE pipeline = 'client' AND name IN (${placeholders})`)
+    .all(...names);
+  if (toRemove.length === 0) return;
+
+  const removeIds = toRemove.map((s) => s.id);
+  const idPlaceholders = removeIds.map(() => '?').join(',');
+
+  const run = db.transaction(() => {
+    for (const stage of toRemove) {
+      const forward = db
+        .prepare(
+          `SELECT id FROM pipeline_stages
+           WHERE pipeline = 'client' AND position > ? AND id NOT IN (${idPlaceholders})
+           ORDER BY position ASC LIMIT 1`
+        )
+        .get(stage.position, ...removeIds);
+      const backward = db
+        .prepare(
+          `SELECT id FROM pipeline_stages
+           WHERE pipeline = 'client' AND position < ? AND id NOT IN (${idPlaceholders})
+           ORDER BY position DESC LIMIT 1`
+        )
+        .get(stage.position, ...removeIds);
+      const fallback = forward || backward;
+
+      if (fallback) {
+        db.prepare('UPDATE clients SET stage_id = ? WHERE stage_id = ?').run(fallback.id, stage.id);
+      }
+      db.prepare('DELETE FROM pipeline_stages WHERE id = ?').run(stage.id);
+    }
+
+    const remaining = db
+      .prepare("SELECT id FROM pipeline_stages WHERE pipeline = 'client' ORDER BY position ASC")
+      .all();
+    const renumber = db.prepare('UPDATE pipeline_stages SET position = ? WHERE id = ?');
+    remaining.forEach((s, i) => renumber.run(i + 1, s.id));
+  });
+
+  run();
+}
+
+migrateRemoveClientStages(['Valuation & Pricing Analysis', 'Finance Finalisation', 'Handover']);
 
 const PARTNER_STAGES = [
   'New Contact',
@@ -66,10 +115,12 @@ seedStages('client', CLIENT_STAGES);
 seedStages('partner', PARTNER_STAGES);
 
 // Demo deployments only (Render's DEMO_SEED=true) — never runs against a real,
-// already-in-use database, since it's gated by both the env var and an empty
-// clients table. See db/seed-demo.js for what it inserts.
+// already-in-use database, since each seed function is separately gated by both
+// the env var and an empty table. See db/seed-demo.js for what these insert.
 if (process.env.DEMO_SEED === 'true') {
-  require('./seed-demo').seedDemoData(db);
+  const { seedDemoData, seedDemoUser } = require('./seed-demo');
+  seedDemoUser(db);
+  seedDemoData(db);
 }
 
 module.exports = db;

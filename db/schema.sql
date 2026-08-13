@@ -49,6 +49,36 @@ CREATE TABLE IF NOT EXISTS app_settings (
   value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS labels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  color TEXT NOT NULL DEFAULT '#0071e3',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS client_labels (
+  client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  label_id INTEGER NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+  PRIMARY KEY (client_id, label_id)
+);
+
+CREATE TABLE IF NOT EXISTS partner_labels (
+  partner_id INTEGER NOT NULL REFERENCES partners(id) ON DELETE CASCADE,
+  label_id INTEGER NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+  PRIMARY KEY (partner_id, label_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_clients_stage ON clients(stage_id);
 CREATE INDEX IF NOT EXISTS idx_partners_stage ON partners(stage_id);
 CREATE INDEX IF NOT EXISTS idx_call_logs_client ON call_logs(client_id);
+CREATE INDEX IF NOT EXISTS idx_client_labels_label ON client_labels(label_id);
+CREATE INDEX IF NOT EXISTS idx_partner_labels_label ON partner_labels(label_id);

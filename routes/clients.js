@@ -16,9 +16,17 @@ function withExtras(client) {
       'SELECT type, logged_at FROM call_logs WHERE client_id = ? ORDER BY logged_at DESC, id DESC LIMIT 1'
     )
     .get(client.id);
+  const labels = db
+    .prepare(
+      `SELECT l.id, l.name, l.color FROM labels l
+       JOIN client_labels cl ON cl.label_id = l.id
+       WHERE cl.client_id = ? ORDER BY l.name`
+    )
+    .all(client.id);
   return {
     ...client,
     last_contact: lastCall ? { type: lastCall.type, logged_at: lastCall.logged_at } : null,
+    labels,
   };
 }
 
@@ -196,6 +204,24 @@ router.patch('/:id/restore', (req, res) => {
 
   const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
   res.json(withExtras(updated));
+});
+
+router.post('/:id/labels', (req, res) => {
+  const client = db.prepare('SELECT id FROM clients WHERE id = ?').get(req.params.id);
+  if (!client) return res.status(404).json({ error: 'not found' });
+  const label = db.prepare('SELECT id FROM labels WHERE id = ?').get(req.body.label_id);
+  if (!label) return res.status(404).json({ error: 'label not found' });
+
+  db.prepare('INSERT OR IGNORE INTO client_labels (client_id, label_id) VALUES (?, ?)')
+    .run(req.params.id, req.body.label_id);
+
+  res.json(withExtras(db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id)));
+});
+
+router.delete('/:id/labels/:labelId', (req, res) => {
+  db.prepare('DELETE FROM client_labels WHERE client_id = ? AND label_id = ?')
+    .run(req.params.id, req.params.labelId);
+  res.json(withExtras(db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id)));
 });
 
 router.delete('/:id', (req, res) => {

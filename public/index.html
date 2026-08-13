@@ -17,7 +17,7 @@
     </div>
     <p id="pageSubtitle" class="hidden"></p>
   </div>
-  <div class="topbar-actions">
+  <div class="topbar-actions" id="topbarActions">
     <div class="pipeline-toggle" id="pipelineToggle">
       <span class="toggle-indicator" id="toggleIndicator"></span>
       <button class="toggle-btn active" data-pipeline="client">Clients</button>
@@ -28,8 +28,50 @@
   </div>
 </header>
 
+<div id="authView" class="auth-view hidden">
+  <div class="auth-card">
+    <h2 id="authTitle">Sign In</h2>
+    <p id="authSubtitle" class="text-muted">Sign in to continue.</p>
+    <div id="demoHint" class="demo-hint hidden"></div>
+
+    <form id="authForm">
+      <label id="authNameField" class="hidden">Name <input type="text" id="auth_name" /></label>
+      <label>Email <input type="email" id="auth_email" autocomplete="username" required /></label>
+      <label>Password <input type="password" id="auth_password" autocomplete="current-password" required /></label>
+      <div id="authError" class="auth-error hidden"></div>
+      <button type="submit" class="btn btn-add" id="authSubmitBtn">Sign In</button>
+    </form>
+  </div>
+</div>
+
 <div class="toolbar" id="toolbar">
   <input id="searchInput" type="text" placeholder="Search clients..." class="search-input" />
+
+  <div class="filter-wrap">
+    <button id="filterBtn" class="btn-icon-square" title="Filter">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M1.5 2H14.5L9.5 8.3V13L6.5 14.5V8.3L1.5 2Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round"/>
+      </svg>
+      <span id="filterBadge" class="filter-badge hidden"></span>
+    </button>
+
+    <div id="filterPanel" class="filter-panel hidden">
+      <div id="filterLabelsSection" class="filter-section">
+        <h4>Labels</h4>
+        <div id="filterLabelsList" class="filter-checkbox-list"></div>
+      </div>
+      <div id="filterStatusSection" class="filter-section">
+        <h4>Status</h4>
+        <div id="filterStatusList" class="filter-checkbox-list"></div>
+      </div>
+      <div id="filterPartnerSection" class="filter-section">
+        <h4>Referred by</h4>
+        <div id="filterPartnerList" class="filter-checkbox-list"></div>
+      </div>
+      <button type="button" id="clearFiltersBtn" class="btn btn-secondary btn-tiny">Clear filters</button>
+    </div>
+  </div>
+
   <div class="view-tabs" id="clientViewTabs">
     <button class="view-tab active" data-view="board">Board</button>
     <button class="view-tab" data-view="completed">Completed</button>
@@ -86,16 +128,48 @@
   </section>
 
   <section class="settings-section">
-    <h2>Backup</h2>
-    <p>Point this at a folder that OneDrive or iCloud Drive already syncs on this computer. The app just copies the database file there — it doesn't need an account, sign-in, or internet access to do it.</p>
+    <h2>Labels</h2>
+    <p>Create labels to tag clients and referral partners with anything useful — VIP, First Home Buyer, needs financing, and so on.</p>
     <div class="settings-row">
-      <input type="text" id="backupFolderInput" class="search-input" placeholder="e.g. /Users/rob/Library/Mobile Documents/com~apple~CloudDocs/MaisonsCRM Backups" />
-      <button id="saveBackupFolderBtn" class="btn btn-secondary">Save Folder</button>
+      <input type="text" id="newLabelName" class="label-name-input" placeholder="Label name" />
+      <div class="color-swatch-picker" id="newLabelColorPicker"></div>
+      <button id="createLabelBtn" class="btn btn-add">Add Label</button>
+    </div>
+    <div id="labelsList" class="labels-list"></div>
+  </section>
+
+  <section class="settings-section">
+    <h2>Account</h2>
+    <p>Signed in as <strong id="accountCurrentName"></strong> (<span id="accountCurrentEmail"></span>).</p>
+    <div class="field-group">
+      <label>Name <input type="text" id="account_name" /></label>
+      <label>Email <input type="email" id="account_email" /></label>
+      <label>New password <input type="password" id="account_password" placeholder="Leave blank to keep current" /></label>
+      <label>Confirm new password <input type="password" id="account_password_confirm" /></label>
     </div>
     <div class="settings-row">
-      <button id="backupNowBtn" class="btn btn-add">Back Up Now</button>
-      <span id="backupStatus" class="text-muted"></span>
+      <button id="saveProfileBtn" class="btn btn-add">Save Profile</button>
+      <button id="logoutBtn" class="btn btn-secondary">Log Out</button>
     </div>
+    <div id="profileResult" class="import-result hidden"></div>
+  </section>
+
+  <section class="settings-section hidden" id="usersSection">
+    <h2>Users</h2>
+    <p>Create logins for other people who need access to this CRM.</p>
+    <div class="field-group">
+      <label>Name <input type="text" id="newUserName" /></label>
+      <label>Email <input type="email" id="newUserEmail" /></label>
+      <label>Password <input type="password" id="newUserPassword" /></label>
+      <label>Role
+        <select id="newUserRole">
+          <option value="member">Member</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+    </div>
+    <button id="createUserBtn" class="btn btn-add">Create User</button>
+    <div id="usersList" class="labels-list"></div>
   </section>
 
 </div>
@@ -114,7 +188,8 @@
         <label>Name <input type="text" id="f_name" required /></label>
         <label>Phone <input type="text" id="f_phone" /></label>
         <label>Email <input type="email" id="f_email" /></label>
-        <label>Budget <input type="text" id="f_budget_label" placeholder="e.g. $600,000 - $700,000" /></label>
+        <label>Budget from <select id="f_budget_from"></select></label>
+        <label>Budget to <select id="f_budget_to"></select></label>
         <label>Status
           <select id="f_status">
             <option value="cold">Cold</option>
@@ -141,6 +216,11 @@
         <label>Mobile <input type="text" id="p_mobile" /></label>
         <label>Email <input type="email" id="p_email" /></label>
         <label class="full-width">Notes <textarea id="p_notes"></textarea></label>
+      </div>
+
+      <div class="labels-field">
+        <span class="labels-field-title">Labels</span>
+        <div id="labelCheckboxes" class="label-chip-picker"></div>
       </div>
 
       <div class="modal-footer">
