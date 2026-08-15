@@ -1,7 +1,7 @@
+require('dotenv').config();
+require('express-async-errors');
 const path = require('path');
-const crypto = require('crypto');
 const express = require('express');
-const session = require('express-session');
 const db = require('./db');
 
 const authRouter = require('./routes/auth');
@@ -11,6 +11,7 @@ const partnersRouter = require('./routes/partners');
 const callsRouter = require('./routes/calls');
 const importRouter = require('./routes/import');
 const labelsRouter = require('./routes/labels');
+const { requireAuth, requireAdmin } = require('./middleware/requireAuth');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -19,46 +20,29 @@ const PORT = process.env.PORT || 4000;
 app.use(express.json({ limit: '15mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Behind Render's proxy, this lets express-session's cookie:{secure:'auto'} correctly
-// detect HTTPS. A fresh random secret each boot means restarting the server signs
-// everyone out — an acceptable, simple tradeoff for a small local/demo app.
-app.set('trust proxy', 1);
-app.use(session({
-  secret: crypto.randomBytes(32).toString('hex'),
-  resave: false,
-  saveUninitialized: false,
-  rolling: true,
-  cookie: {
-    secure: 'auto',
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days, refreshed on activity
-  },
-}));
-
-// Public — must be reachable before a session exists.
-app.use('/api/auth', authRouter);
-app.get('/api/meta', (req, res) => {
-  res.json({ demo: process.env.DEMO_SEED === 'true' });
+// Public — reachable before sign-in. Both are safe to expose: the anon key
+// is meant for the browser, and it's paired with RLS denying it any access
+// to the actual data tables (see db/schema.sql).
+app.get('/api/config', (req, res) => {
+  res.json({
+    supabaseUrl: process.env.SUPABASE_URL,
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+  });
 });
+app.get('/api/meta', (req, res) => {
+  res.json({ demo: db.schema === 'demo' });
+});
+app.use('/api/auth', authRouter);
 
-function requireAuth(req, res, next) {
-  if (req.session && req.session.userId) return next();
-  res.status(401).json({ error: 'Not authenticated' });
-}
-function requireAdmin(req, res, next) {
-  if (req.session && req.session.role === 'admin') return next();
-  res.status(403).json({ error: 'Admin access required' });
-}
-
-// Everything registered below this line requires a signed-in session.
+// Everything registered below this line requires a valid Supabase session.
 app.use('/api', requireAuth);
 
-app.get('/api/stages', (req, res) => {
+app.get('/api/stages', async (req, res) => {
   const pipeline = req.query.pipeline === 'partner' ? 'partner' : 'client';
-  const rows = db
-    .prepare('SELECT * FROM pipeline_stages WHERE pipeline = ? ORDER BY position')
-    .all(pipeline);
+  const { rows } = await db.query(
+    'SELECT * FROM pipeline_stages WHERE pipeline = $1 ORDER BY position',
+    [pipeline]
+  );
   res.json(rows);
 });
 
@@ -69,6 +53,27 @@ app.use('/api/clients', clientsRouter);
 app.use('/api/partners', partnersRouter);
 app.use('/api', callsRouter);
 
-app.listen(PORT, () => {
-  console.log(`Maisons CRM running at http://localhost:${PORT}`);
+if (db.schema === 'demo') {
+  app.post('/api/demo/reset', requireAdmin, async (req, res) => {
+    await db.query('SELECT demo.demo_reset()');
+    res.status(204).end();
+  });
+}
+
+// express-async-errors forwards thrown/rejected errors from the async
+// handlers above here instead of leaving the request hanging.
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'Something went wrong.' });
 });
+
+// On Vercel this file is required by api/index.js as a serverless function
+// and never calls listen() itself — Vercel invokes the exported app per
+// request. Locally (npm start) it's run directly, so it needs the listener.
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Maisons CRM running at http://localhost:${PORT} (schema: ${db.schema})`);
+  });
+}
+
+module.exports = app;

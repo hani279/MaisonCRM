@@ -4,15 +4,22 @@
   "description": "Local dual-pipeline CRM for Maisons Buyers Agency",
   "private": true,
   "main": "server.js",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "start": "node server.js",
     "backup": "node scripts/backup.js",
-    "import-clients": "node scripts/import-clients-csv.js"
+    "import-clients": "node scripts/import-clients-csv.js",
+    "init-schema": "node scripts/init-supabase-schema.js",
+    "migrate-data": "node scripts/migrate-sqlite-to-supabase.js",
+    "seed-demo": "node scripts/seed-demo-supabase.js"
   },
   "dependencies": {
-    "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^11.3.0",
+    "@supabase/supabase-js": "^2.112.3",
+    "dotenv": "^17.4.2",
     "express": "^4.19.2",
-    "express-session": "^1.19.0"
+    "express-async-errors": "^3.1.1",
+    "pg": "^8.23.0"
   }
 }

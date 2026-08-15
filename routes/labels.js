@@ -5,12 +5,12 @@ const router = express.Router();
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
-router.get('/', (req, res) => {
-  const rows = db.prepare('SELECT * FROM labels ORDER BY name').all();
+router.get('/', async (req, res) => {
+  const { rows } = await db.query('SELECT * FROM labels ORDER BY name');
   res.json(rows);
 });
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const { name, color } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'name is required' });
@@ -19,24 +19,23 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'color must be a hex value like #0071e3' });
   }
 
-  let info;
   try {
-    info = db
-      .prepare('INSERT INTO labels (name, color) VALUES (?, ?)')
-      .run(name.trim(), color || '#0071e3');
+    const { rows } = await db.query(
+      'INSERT INTO labels (name, color) VALUES ($1, $2) RETURNING *',
+      [name.trim(), color || '#0071e3']
+    );
+    res.status(201).json(rows[0]);
   } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+    if (err.code === '23505') {
       return res.status(409).json({ error: 'A label with that name already exists' });
     }
     throw err;
   }
-
-  const created = db.prepare('SELECT * FROM labels WHERE id = ?').get(info.lastInsertRowid);
-  res.status(201).json(created);
 });
 
-router.patch('/:id', (req, res) => {
-  const existing = db.prepare('SELECT * FROM labels WHERE id = ?').get(req.params.id);
+router.patch('/:id', async (req, res) => {
+  const { rows: existingRows } = await db.query('SELECT * FROM labels WHERE id = $1', [req.params.id]);
+  const existing = existingRows[0];
   if (!existing) return res.status(404).json({ error: 'not found' });
 
   const name = req.body.name !== undefined ? req.body.name.trim() : existing.name;
@@ -46,19 +45,21 @@ router.patch('/:id', (req, res) => {
   }
 
   try {
-    db.prepare('UPDATE labels SET name = ?, color = ? WHERE id = ?').run(name, color, req.params.id);
+    const { rows } = await db.query(
+      'UPDATE labels SET name = $1, color = $2 WHERE id = $3 RETURNING *',
+      [name, color, req.params.id]
+    );
+    res.json(rows[0]);
   } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+    if (err.code === '23505') {
       return res.status(409).json({ error: 'A label with that name already exists' });
     }
     throw err;
   }
-
-  res.json(db.prepare('SELECT * FROM labels WHERE id = ?').get(req.params.id));
 });
 
-router.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM labels WHERE id = ?').run(req.params.id);
+router.delete('/:id', async (req, res) => {
+  await db.query('DELETE FROM labels WHERE id = $1', [req.params.id]);
   res.status(204).end();
 });
 

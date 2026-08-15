@@ -23,10 +23,13 @@ const toggleSprings = {};
 const el = (id) => document.getElementById(id);
 
 async function api(url, opts) {
-  const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
+  const headers = { 'Content-Type': 'application/json' };
+  if (window.supabaseClient) {
+    const { data } = await window.supabaseClient.auth.getSession();
+    if (data.session) headers.Authorization = `Bearer ${data.session.access_token}`;
+  }
+
+  const res = await fetch(url, { headers, ...opts });
   if (res.status === 401 && !url.startsWith('/api/auth/')) {
     // Session expired mid-use — bounce back to the login screen instead of a raw error.
     showAuthScreen('login');
@@ -40,9 +43,18 @@ async function api(url, opts) {
   return res.json();
 }
 
+function toAppUser(user) {
+  return {
+    id: user.id,
+    name: (user.user_metadata && user.user_metadata.name) || '',
+    email: user.email,
+    role: (user.user_metadata && user.user_metadata.role) || 'member',
+  };
+}
+
 function formatRelative(dateStr) {
   if (!dateStr) return '';
-  const then = new Date(dateStr.replace(' ', 'T') + 'Z');
+  const then = new Date(dateStr);
   const diffMs = Date.now() - then.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
   if (diffDays <= 0) return 'today';
@@ -992,14 +1004,17 @@ async function saveProfile() {
     return;
   }
 
-  const payload = { name: el('account_name').value, email: el('account_email').value };
+  const name = el('account_name').value.trim();
+  const email = el('account_email').value.trim();
+  const payload = { email, data: { name, role: state.currentUser.role } };
   if (password) payload.password = password;
 
   try {
-    const updated = await api('/api/auth/profile', { method: 'PATCH', body: JSON.stringify(payload) });
-    state.currentUser = updated;
-    el('accountCurrentName').textContent = updated.name;
-    el('accountCurrentEmail').textContent = updated.email;
+    const { data, error } = await window.supabaseClient.auth.updateUser(payload);
+    if (error) throw error;
+    state.currentUser = toAppUser(data.user);
+    el('accountCurrentName').textContent = state.currentUser.name;
+    el('accountCurrentEmail').textContent = state.currentUser.email;
     el('account_password').value = '';
     el('account_password_confirm').value = '';
     el('profileResult').textContent = 'Profile updated.';
@@ -1010,7 +1025,7 @@ async function saveProfile() {
 }
 
 async function logout() {
-  await api('/api/auth/logout', { method: 'POST' });
+  await window.supabaseClient.auth.signOut();
   showAuthScreen('login');
 }
 
@@ -1031,7 +1046,7 @@ async function loadUsersList() {
   `).join('');
 
   el('usersList').querySelectorAll('.label-delete-btn').forEach((btn) => {
-    btn.addEventListener('click', () => deleteUser(Number(btn.dataset.userId)));
+    btn.addEventListener('click', () => deleteUser(btn.dataset.userId));
   });
 }
 
@@ -1341,6 +1356,8 @@ async function showApp() {
 }
 
 async function checkAuthAndInit() {
+  await window.supabaseReady;
+
   let status;
   try {
     status = await fetch('/api/auth/status').then((r) => r.json());
@@ -1351,9 +1368,11 @@ async function checkAuthAndInit() {
   }
 
   if (status.needsSetup) return showAuthScreen('setup');
-  if (!status.authenticated) return showAuthScreen('login');
 
-  state.currentUser = status.user;
+  const { data } = await window.supabaseClient.auth.getSession();
+  if (!data.session) return showAuthScreen('login');
+
+  state.currentUser = toAppUser(data.session.user);
   showApp();
 }
 
@@ -1361,16 +1380,21 @@ async function submitAuthForm(evt) {
   evt.preventDefault();
   el('authError').classList.add('hidden');
 
-  const payload = {
-    email: el('auth_email').value,
-    password: el('auth_password').value,
-  };
-  if (authMode === 'setup') payload.name = el('auth_name').value;
+  const email = el('auth_email').value;
+  const password = el('auth_password').value;
 
   try {
-    const endpoint = authMode === 'setup' ? '/api/auth/setup' : '/api/auth/login';
-    const user = await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
-    state.currentUser = user;
+    if (authMode === 'setup') {
+      await api('/api/auth/setup', {
+        method: 'POST',
+        body: JSON.stringify({ name: el('auth_name').value, email, password }),
+      });
+    }
+
+    const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+
+    state.currentUser = toAppUser(data.user);
     await showApp();
   } catch (err) {
     el('authError').textContent = err.message;

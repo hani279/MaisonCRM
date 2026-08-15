@@ -1,30 +1,29 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
 const db = require('../db');
+const supabaseAdmin = require('../db/supabaseAdmin');
 
 const router = express.Router();
 
-function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email, role: u.role };
+// Public sign-up is never exposed to the browser — every account, including
+// the first admin, is created here via the service-role Admin API. This
+// keeps a stranger who has the (necessarily public) anon key from ever being
+// able to self-register and get read/write access to the CRM.
+//
+// "Has setup run" is tracked per-schema in app_meta rather than by counting
+// Supabase Auth users, because Auth is project-wide, not schema-scoped — the
+// demo deployment's permanent login would otherwise make the real app think
+// setup was already done (and vice versa).
+async function setupDone() {
+  const { rows } = await db.query("SELECT 1 FROM app_meta WHERE key = 'admin_created'");
+  return rows.length > 0;
 }
 
-router.get('/status', (req, res) => {
-  const count = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  if (count === 0) {
-    return res.json({ needsSetup: true, authenticated: false, user: null });
-  }
-
-  if (req.session && req.session.userId) {
-    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.session.userId);
-    if (user) return res.json({ needsSetup: false, authenticated: true, user: publicUser(user) });
-  }
-
-  res.json({ needsSetup: false, authenticated: false, user: null });
+router.get('/status', async (req, res) => {
+  res.json({ needsSetup: !(await setupDone()) });
 });
 
-router.post('/setup', (req, res) => {
-  const count = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-  if (count > 0) {
+router.post('/setup', async (req, res) => {
+  if (await setupDone()) {
     return res.status(403).json({ error: 'Setup has already been completed.' });
   }
 
@@ -35,69 +34,19 @@ router.post('/setup', (req, res) => {
     return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   }
 
-  const hash = bcrypt.hashSync(password, 10);
-  const info = db
-    .prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)')
-    .run(name.trim(), email.trim().toLowerCase(), hash, 'admin');
+  const { data, error } = await supabaseAdmin.auth.admin.createUser({
+    email: email.trim().toLowerCase(),
+    password,
+    email_confirm: true,
+    user_metadata: { name: name.trim(), role: 'admin', schema: db.schema },
+  });
+  if (error) return res.status(400).json({ error: error.message });
 
-  req.session.userId = info.lastInsertRowid;
-  req.session.role = 'admin';
+  await db.query(
+    "INSERT INTO app_meta (key, value) VALUES ('admin_created', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true'"
+  );
 
-  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-  res.status(201).json(publicUser(user));
-});
-
-router.post('/login', (req, res) => {
-  const { email, password } = req.body;
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get((email || '').trim().toLowerCase());
-
-  if (!user || !bcrypt.compareSync(password || '', user.password_hash)) {
-    return res.status(401).json({ error: 'Incorrect email or password.' });
-  }
-
-  req.session.userId = user.id;
-  req.session.role = user.role;
-  res.json(publicUser(user));
-});
-
-router.post('/logout', (req, res) => {
-  if (!req.session) return res.status(204).end();
-  req.session.destroy(() => res.status(204).end());
-});
-
-router.patch('/profile', (req, res) => {
-  if (!req.session || !req.session.userId) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-
-  const existing = db.prepare('SELECT * FROM users WHERE id = ?').get(req.session.userId);
-  const name = req.body.name !== undefined ? req.body.name.trim() : existing.name;
-  const email = req.body.email !== undefined ? req.body.email.trim().toLowerCase() : existing.email;
-
-  if (!name) return res.status(400).json({ error: 'Name is required.' });
-  if (!email) return res.status(400).json({ error: 'Email is required.' });
-
-  let passwordHash = existing.password_hash;
-  if (req.body.password) {
-    if (req.body.password.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters.' });
-    }
-    passwordHash = bcrypt.hashSync(req.body.password, 10);
-  }
-
-  try {
-    db.prepare('UPDATE users SET name = ?, email = ?, password_hash = ? WHERE id = ?')
-      .run(name, email, passwordHash, req.session.userId);
-  } catch (err) {
-    if (err.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'That email is already in use.' });
-    }
-    throw err;
-  }
-
-  req.session.role = existing.role;
-  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.session.userId);
-  res.json(publicUser(updated));
+  res.status(201).json({ id: data.user.id, name: name.trim(), email: data.user.email, role: 'admin' });
 });
 
 module.exports = router;

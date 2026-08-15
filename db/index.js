@@ -1,126 +1,35 @@
-const path = require('path');
-const fs = require('fs');
-const Database = require('better-sqlite3');
+const { Pool, types } = require('pg');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+// node-postgres returns BIGINT (our id columns) as strings by default, to
+// avoid precision loss above Number.MAX_SAFE_INTEGER. This CRM's row counts
+// never get remotely close to that, and the frontend expects numeric ids
+// (as it always got from SQLite's INTEGER PRIMARY KEY), so parse them as
+// plain numbers instead of switching every id comparison in app.js to strings.
+types.setTypeParser(20, (val) => parseInt(val, 10));
 
-const DB_PATH = path.join(DATA_DIR, 'maisons.db');
-const db = new Database(DB_PATH);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
-
-const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
-db.exec(schema);
-
-function ensureColumn(table, column, definition) {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all();
-  if (!columns.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-  }
+const rawSchema = process.env.PGSCHEMA || 'public';
+if (!/^[a-z_][a-z0-9_]*$/.test(rawSchema)) {
+  throw new Error(`Invalid PGSCHEMA "${rawSchema}"`);
 }
 
-// Migration for databases created before archiving existed.
-ensureColumn('clients', 'archived_at', 'TEXT DEFAULT NULL');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  // Startup-packet option, applied before this connection runs any query —
+  // lets one codebase serve either the real app (public schema) or the demo
+  // deployment (demo schema) via a single PGSCHEMA env var, with every
+  // existing unqualified table name (clients, partners, ...) resolving
+  // automatically to the right schema.
+  options: `-c search_path=${rawSchema},public`,
+  // Kept small on purpose: on Vercel this pool is created fresh per cold
+  // serverless instance, and many of those can run concurrently — a large
+  // per-instance pool would multiply out and exhaust Supabase's pooler
+  // connection limit for what is otherwise a low-traffic internal CRM.
+  max: 3,
+});
 
-const CLIENT_STAGES = [
-  'Initial Consultation',
-  'Engagement & Agreement',
-  'Brief Development',
-  'Property Search',
-  'Shortlisting & Inspections',
-  'Due Diligence',
-  'Negotiation / Auction Bidding',
-  'Contract Exchange',
-  'Cooling-off / Unconditional',
-  'Pre-Settlement Inspection',
-  'Settlement',
-];
-
-// Migration for databases seeded before these stages were removed. Any client
-// still sitting on a removed stage is moved to the nearest surviving stage
-// (forward first, since their progress shouldn't regress; back only if the
-// removed stage was the last one) — then remaining positions are renumbered
-// contiguously so Back/Next navigation stays correct. Safe to run every boot:
-// it's a no-op once the named stages no longer exist.
-function migrateRemoveClientStages(names) {
-  const placeholders = names.map(() => '?').join(',');
-  const toRemove = db
-    .prepare(`SELECT id, position FROM pipeline_stages WHERE pipeline = 'client' AND name IN (${placeholders})`)
-    .all(...names);
-  if (toRemove.length === 0) return;
-
-  const removeIds = toRemove.map((s) => s.id);
-  const idPlaceholders = removeIds.map(() => '?').join(',');
-
-  const run = db.transaction(() => {
-    for (const stage of toRemove) {
-      const forward = db
-        .prepare(
-          `SELECT id FROM pipeline_stages
-           WHERE pipeline = 'client' AND position > ? AND id NOT IN (${idPlaceholders})
-           ORDER BY position ASC LIMIT 1`
-        )
-        .get(stage.position, ...removeIds);
-      const backward = db
-        .prepare(
-          `SELECT id FROM pipeline_stages
-           WHERE pipeline = 'client' AND position < ? AND id NOT IN (${idPlaceholders})
-           ORDER BY position DESC LIMIT 1`
-        )
-        .get(stage.position, ...removeIds);
-      const fallback = forward || backward;
-
-      if (fallback) {
-        db.prepare('UPDATE clients SET stage_id = ? WHERE stage_id = ?').run(fallback.id, stage.id);
-      }
-      db.prepare('DELETE FROM pipeline_stages WHERE id = ?').run(stage.id);
-    }
-
-    const remaining = db
-      .prepare("SELECT id FROM pipeline_stages WHERE pipeline = 'client' ORDER BY position ASC")
-      .all();
-    const renumber = db.prepare('UPDATE pipeline_stages SET position = ? WHERE id = ?');
-    remaining.forEach((s, i) => renumber.run(i + 1, s.id));
-  });
-
-  run();
+async function query(text, params) {
+  return pool.query(text, params);
 }
 
-migrateRemoveClientStages(['Valuation & Pricing Analysis', 'Finance Finalisation', 'Handover']);
-
-const PARTNER_STAGES = [
-  'New Contact',
-  'Building Relationship',
-  'Active Referrer',
-  'Fee Pending',
-  'Fee Paid',
-];
-
-function seedStages(pipeline, names) {
-  const count = db
-    .prepare('SELECT COUNT(*) AS c FROM pipeline_stages WHERE pipeline = ?')
-    .get(pipeline).c;
-  if (count > 0) return;
-  const insert = db.prepare(
-    'INSERT INTO pipeline_stages (pipeline, name, position) VALUES (?, ?, ?)'
-  );
-  const insertMany = db.transaction((rows) => {
-    rows.forEach((name, i) => insert.run(pipeline, name, i + 1));
-  });
-  insertMany(names);
-}
-
-seedStages('client', CLIENT_STAGES);
-seedStages('partner', PARTNER_STAGES);
-
-// Demo deployments only (Render's DEMO_SEED=true) — never runs against a real,
-// already-in-use database, since each seed function is separately gated by both
-// the env var and an empty table. See db/seed-demo.js for what these insert.
-if (process.env.DEMO_SEED === 'true') {
-  const { seedDemoData, seedDemoUser } = require('./seed-demo');
-  seedDemoUser(db);
-  seedDemoData(db);
-}
-
-module.exports = db;
+module.exports = { pool, query, schema: rawSchema };

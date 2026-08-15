@@ -57,7 +57,7 @@ router.post('/parse', (req, res) => {
   });
 });
 
-router.post('/commit', (req, res) => {
+router.post('/commit', async (req, res) => {
   const { csvText, map } = req.body;
   if (!csvText || !map) {
     return res.status(400).json({ error: 'csvText and map are required' });
@@ -68,43 +68,42 @@ router.post('/commit', (req, res) => {
 
   const rows = parseCsv(csvText);
 
-  const firstStage = db
-    .prepare("SELECT id FROM pipeline_stages WHERE pipeline = 'client' ORDER BY position LIMIT 1")
-    .get();
+  const { rows: stageRows } = await db.query(
+    "SELECT id FROM pipeline_stages WHERE pipeline = 'client' ORDER BY position LIMIT 1"
+  );
+  const firstStage = stageRows[0];
   if (!firstStage) {
     return res.status(500).json({ error: 'No client stages are configured.' });
   }
-
-  const insert = db.prepare(`
-    INSERT INTO clients (name, phone, email, budget_label, notes, stage_id, status)
-    VALUES (@name, @phone, @email, @budget_label, @notes, @stage_id, 'cold')
-  `);
 
   const pick = (row, col) => (col && row[col] ? row[col].trim() : '') || null;
 
   let imported = 0;
   let skipped = 0;
 
-  const runImport = db.transaction((allRows) => {
-    for (const row of allRows) {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const row of rows) {
       const first = map.nameCol ? (row[map.nameCol] || '').trim() : '';
       const last = map.lastNameCol ? (row[map.lastNameCol] || '').trim() : '';
       const name = [first, last].filter(Boolean).join(' ').trim();
       if (!name) { skipped++; continue; }
 
-      insert.run({
-        name,
-        phone: pick(row, map.phoneCol),
-        email: pick(row, map.emailCol),
-        budget_label: pick(row, map.budgetCol),
-        notes: pick(row, map.notesCol),
-        stage_id: firstStage.id,
-      });
+      await client.query(
+        `INSERT INTO clients (name, phone, email, budget_label, notes, stage_id, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'cold')`,
+        [name, pick(row, map.phoneCol), pick(row, map.emailCol), pick(row, map.budgetCol), pick(row, map.notesCol), firstStage.id]
+      );
       imported++;
     }
-  });
-
-  runImport(rows);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
   res.json({ imported, skipped });
 });

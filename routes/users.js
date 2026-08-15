@@ -1,19 +1,37 @@
 const express = require('express');
-const bcrypt = require('bcryptjs');
 const db = require('../db');
+const supabaseAdmin = require('../db/supabaseAdmin');
 
 const router = express.Router();
 
 function publicUser(u) {
-  return { id: u.id, name: u.name, email: u.email, role: u.role, created_at: u.created_at };
+  return {
+    id: u.id,
+    name: (u.user_metadata && u.user_metadata.name) || '',
+    email: u.email,
+    role: (u.user_metadata && u.user_metadata.role) || 'member',
+    created_at: u.created_at,
+  };
 }
 
-router.get('/', (req, res) => {
-  const users = db.prepare('SELECT * FROM users ORDER BY name').all();
+// Supabase Auth's user list is project-wide, not schema-scoped, but the real
+// app and the demo deployment share one project — every user is tagged with
+// the schema that owns it at creation time so each deployment's Settings ->
+// Users only ever shows (and can only ever delete) its own logins.
+function belongsToThisSchema(u) {
+  return u.user_metadata && u.user_metadata.schema === db.schema;
+}
+
+router.get('/', async (req, res) => {
+  const { data, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+  if (error) return res.status(500).json({ error: error.message });
+  const users = data.users
+    .filter(belongsToThisSchema)
+    .sort((a, b) => publicUser(a).name.localeCompare(publicUser(b).name));
   res.json(users.map(publicUser));
 });
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const { name, email, password, role } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required.' });
   if (!email || !email.trim()) return res.status(400).json({ error: 'Email is required.' });
@@ -21,26 +39,32 @@ router.post('/', (req, res) => {
     return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   }
 
-  const hash = bcrypt.hashSync(password, 10);
-  try {
-    const info = db
-      .prepare('INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)')
-      .run(name.trim(), email.trim().toLowerCase(), hash, role === 'admin' ? 'admin' : 'member');
-    const created = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-    res.status(201).json(publicUser(created));
-  } catch (err) {
-    if (err.message.includes('UNIQUE')) {
+  const { data, error } = await supabaseAdmin.auth.admin.createUser({
+    email: email.trim().toLowerCase(),
+    password,
+    email_confirm: true,
+    user_metadata: { name: name.trim(), role: role === 'admin' ? 'admin' : 'member', schema: db.schema },
+  });
+  if (error) {
+    if (error.message.toLowerCase().includes('already been registered')) {
       return res.status(409).json({ error: 'A user with that email already exists.' });
     }
-    throw err;
+    return res.status(400).json({ error: error.message });
   }
+
+  res.status(201).json(publicUser(data.user));
 });
 
-router.delete('/:id', (req, res) => {
-  if (Number(req.params.id) === req.session.userId) {
+router.delete('/:id', async (req, res) => {
+  if (req.params.id === req.user.id) {
     return res.status(400).json({ error: "You can't delete your own account." });
   }
-  db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  const { data, error: getError } = await supabaseAdmin.auth.admin.getUserById(req.params.id);
+  if (getError || !data.user || !belongsToThisSchema(data.user)) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
+  if (error) return res.status(400).json({ error: error.message });
   res.status(204).end();
 });
 

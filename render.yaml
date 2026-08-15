@@ -6,7 +6,21 @@ services:
     buildCommand: npm install
     startCommand: npm start
     envVars:
-      - key: DEMO_SEED
-        value: "true"
+      - key: PGSCHEMA
+        value: demo
       - key: NODE_ENV
         value: production
+      # Set these four in the Render dashboard (Environment tab) — same
+      # Supabase project as the real app, not committed here:
+      #   SUPABASE_URL
+      #   SUPABASE_ANON_KEY
+      #   SUPABASE_SERVICE_ROLE_KEY
+      #   DATABASE_URL
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false

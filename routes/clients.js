@@ -10,37 +10,33 @@ function csvEscape(value) {
   return str;
 }
 
-function withExtras(client) {
-  const lastCall = db
-    .prepare(
-      'SELECT type, logged_at FROM call_logs WHERE client_id = ? ORDER BY logged_at DESC, id DESC LIMIT 1'
-    )
-    .get(client.id);
-  const labels = db
-    .prepare(
-      `SELECT l.id, l.name, l.color FROM labels l
-       JOIN client_labels cl ON cl.label_id = l.id
-       WHERE cl.client_id = ? ORDER BY l.name`
-    )
-    .all(client.id);
+async function withExtras(client) {
+  const { rows: lastCallRows } = await db.query(
+    'SELECT type, logged_at FROM call_logs WHERE client_id = $1 ORDER BY logged_at DESC, id DESC LIMIT 1',
+    [client.id]
+  );
+  const { rows: labels } = await db.query(
+    `SELECT l.id, l.name, l.color FROM labels l
+     JOIN client_labels cl ON cl.label_id = l.id
+     WHERE cl.client_id = $1 ORDER BY l.name`,
+    [client.id]
+  );
   return {
     ...client,
-    last_contact: lastCall ? { type: lastCall.type, logged_at: lastCall.logged_at } : null,
+    last_contact: lastCallRows[0] ? { type: lastCallRows[0].type, logged_at: lastCallRows[0].logged_at } : null,
     labels,
   };
 }
 
-router.get('/export.csv', (req, res) => {
-  const rows = db
-    .prepare(
-      `SELECT c.*, s.name AS stage_name, p.company_name AS referred_by_company, p.contact_name AS referred_by_contact
-       FROM clients c
-       JOIN pipeline_stages s ON s.id = c.stage_id
-       LEFT JOIN partners p ON p.id = c.referred_by_partner_id
-       WHERE c.archived_at IS NULL
-       ORDER BY s.position, c.name`
-    )
-    .all();
+router.get('/export.csv', async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT c.*, s.name AS stage_name, p.company_name AS referred_by_company, p.contact_name AS referred_by_contact
+     FROM clients c
+     JOIN pipeline_stages s ON s.id = c.stage_id
+     LEFT JOIN partners p ON p.id = c.referred_by_partner_id
+     WHERE c.archived_at IS NULL
+     ORDER BY s.position, c.name`
+  );
 
   const header = [
     'Name', 'Phone', 'Email', 'Budget', 'Stage', 'Status',
@@ -71,23 +67,21 @@ router.get('/export.csv', (req, res) => {
   res.send(lines.join('\n'));
 });
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   const wantArchived = req.query.archived === '1' || req.query.archived === 'true';
-  const rows = db
-    .prepare(
-      `SELECT c.*, s.name AS stage_name, s.position AS stage_position,
-              p.company_name AS referred_by_company, p.contact_name AS referred_by_contact
-       FROM clients c
-       JOIN pipeline_stages s ON s.id = c.stage_id
-       LEFT JOIN partners p ON p.id = c.referred_by_partner_id
-       WHERE c.archived_at IS ${wantArchived ? 'NOT NULL' : 'NULL'}
-       ORDER BY s.position, c.name`
-    )
-    .all();
-  res.json(rows.map(withExtras));
+  const { rows } = await db.query(
+    `SELECT c.*, s.name AS stage_name, s.position AS stage_position,
+            p.company_name AS referred_by_company, p.contact_name AS referred_by_contact
+     FROM clients c
+     JOIN pipeline_stages s ON s.id = c.stage_id
+     LEFT JOIN partners p ON p.id = c.referred_by_partner_id
+     WHERE c.archived_at IS ${wantArchived ? 'NOT NULL' : 'NULL'}
+     ORDER BY s.position, c.name`
+  );
+  res.json(await Promise.all(rows.map(withExtras)));
 });
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const {
     name, phone, email, budget_label, stage_id, status,
     next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, notes,
@@ -99,38 +93,38 @@ router.post('/', (req, res) => {
 
   let resolvedStageId = stage_id;
   if (!resolvedStageId) {
-    const first = db
-      .prepare('SELECT id FROM pipeline_stages WHERE pipeline = ? ORDER BY position LIMIT 1')
-      .get('client');
-    resolvedStageId = first ? first.id : null;
+    const { rows } = await db.query(
+      "SELECT id FROM pipeline_stages WHERE pipeline = 'client' ORDER BY position LIMIT 1"
+    );
+    resolvedStageId = rows[0] ? rows[0].id : null;
   }
 
-  const info = db
-    .prepare(
-      `INSERT INTO clients
-        (name, phone, email, budget_label, stage_id, status, next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, notes)
-       VALUES (@name, @phone, @email, @budget_label, @stage_id, @status, @next_action_label, @next_action_date, @referred_by_partner_id, @referral_fee_note, @notes)`
-    )
-    .run({
-      name: name.trim(),
-      phone: phone || null,
-      email: email || null,
-      budget_label: budget_label || null,
-      stage_id: resolvedStageId,
-      status: status || 'cold',
-      next_action_label: next_action_label || null,
-      next_action_date: next_action_date || null,
-      referred_by_partner_id: referred_by_partner_id || null,
-      referral_fee_note: referral_fee_note || null,
-      notes: notes || null,
-    });
+  const { rows } = await db.query(
+    `INSERT INTO clients
+      (name, phone, email, budget_label, stage_id, status, next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING *`,
+    [
+      name.trim(),
+      phone || null,
+      email || null,
+      budget_label || null,
+      resolvedStageId,
+      status || 'cold',
+      next_action_label || null,
+      next_action_date || null,
+      referred_by_partner_id || null,
+      referral_fee_note || null,
+      notes || null,
+    ]
+  );
 
-  const created = db.prepare('SELECT * FROM clients WHERE id = ?').get(info.lastInsertRowid);
-  res.status(201).json(withExtras(created));
+  res.status(201).json(await withExtras(rows[0]));
 });
 
-router.patch('/:id', (req, res) => {
-  const existing = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+router.patch('/:id', async (req, res) => {
+  const { rows: existingRows } = await db.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+  const existing = existingRows[0];
   if (!existing) return res.status(404).json({ error: 'not found' });
 
   const fields = [
@@ -142,90 +136,104 @@ router.patch('/:id', (req, res) => {
     if (f in req.body) updates[f] = req.body[f] === '' ? null : req.body[f];
   }
   if (Object.keys(updates).length === 0) {
-    return res.json(withExtras(existing));
+    return res.json(await withExtras(existing));
   }
 
-  const setClause = Object.keys(updates).map((f) => `${f} = @${f}`).join(', ');
-  db.prepare(`UPDATE clients SET ${setClause}, updated_at = datetime('now') WHERE id = @id`)
-    .run({ ...updates, id: req.params.id });
+  const keys = Object.keys(updates);
+  const setClause = keys.map((f, i) => `${f} = $${i + 1}`).join(', ');
+  const values = keys.map((f) => updates[f]);
+  values.push(req.params.id);
 
-  const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
-  res.json(withExtras(updated));
+  const { rows } = await db.query(
+    `UPDATE clients SET ${setClause}, updated_at = now() WHERE id = $${keys.length + 1} RETURNING *`,
+    values
+  );
+
+  res.json(await withExtras(rows[0]));
 });
 
-router.patch('/:id/move', (req, res) => {
-  const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+router.patch('/:id/move', async (req, res) => {
+  const { rows: clientRows } = await db.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+  const client = clientRows[0];
   if (!client) return res.status(404).json({ error: 'not found' });
 
-  const currentStage = db.prepare('SELECT * FROM pipeline_stages WHERE id = ?').get(client.stage_id);
+  const { rows: stageRows } = await db.query('SELECT * FROM pipeline_stages WHERE id = $1', [client.stage_id]);
+  const currentStage = stageRows[0];
   const { direction, stage_id } = req.body;
 
   let targetStage;
   if (stage_id) {
-    targetStage = db.prepare('SELECT * FROM pipeline_stages WHERE id = ? AND pipeline = ?').get(stage_id, currentStage.pipeline);
+    const { rows } = await db.query(
+      'SELECT * FROM pipeline_stages WHERE id = $1 AND pipeline = $2',
+      [stage_id, currentStage.pipeline]
+    );
+    targetStage = rows[0];
   } else if (direction === 'next' || direction === 'back') {
     const cmp = direction === 'next' ? '>' : '<';
     const order = direction === 'next' ? 'ASC' : 'DESC';
-    targetStage = db
-      .prepare(
-        `SELECT * FROM pipeline_stages WHERE pipeline = ? AND position ${cmp} ? ORDER BY position ${order} LIMIT 1`
-      )
-      .get(currentStage.pipeline, currentStage.position);
+    const { rows } = await db.query(
+      `SELECT * FROM pipeline_stages WHERE pipeline = $1 AND position ${cmp} $2 ORDER BY position ${order} LIMIT 1`,
+      [currentStage.pipeline, currentStage.position]
+    );
+    targetStage = rows[0];
   }
 
   if (!targetStage) {
     return res.status(400).json({ error: 'no target stage (already at boundary or invalid stage)' });
   }
 
-  db.prepare("UPDATE clients SET stage_id = ?, updated_at = datetime('now') WHERE id = ?")
-    .run(targetStage.id, client.id);
+  const { rows } = await db.query(
+    'UPDATE clients SET stage_id = $1, updated_at = now() WHERE id = $2 RETURNING *',
+    [targetStage.id, client.id]
+  );
 
-  const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(client.id);
-  res.json(withExtras(updated));
+  res.json(await withExtras(rows[0]));
 });
 
-router.patch('/:id/archive', (req, res) => {
-  const existing = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'not found' });
-
-  db.prepare("UPDATE clients SET archived_at = datetime('now'), updated_at = datetime('now') WHERE id = ?")
-    .run(req.params.id);
-
-  const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
-  res.json(withExtras(updated));
+router.patch('/:id/archive', async (req, res) => {
+  const { rows } = await db.query(
+    'UPDATE clients SET archived_at = now(), updated_at = now() WHERE id = $1 RETURNING *',
+    [req.params.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  res.json(await withExtras(rows[0]));
 });
 
-router.patch('/:id/restore', (req, res) => {
-  const existing = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'not found' });
-
-  db.prepare("UPDATE clients SET archived_at = NULL, updated_at = datetime('now') WHERE id = ?")
-    .run(req.params.id);
-
-  const updated = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
-  res.json(withExtras(updated));
+router.patch('/:id/restore', async (req, res) => {
+  const { rows } = await db.query(
+    'UPDATE clients SET archived_at = NULL, updated_at = now() WHERE id = $1 RETURNING *',
+    [req.params.id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'not found' });
+  res.json(await withExtras(rows[0]));
 });
 
-router.post('/:id/labels', (req, res) => {
-  const client = db.prepare('SELECT id FROM clients WHERE id = ?').get(req.params.id);
-  if (!client) return res.status(404).json({ error: 'not found' });
-  const label = db.prepare('SELECT id FROM labels WHERE id = ?').get(req.body.label_id);
-  if (!label) return res.status(404).json({ error: 'label not found' });
+router.post('/:id/labels', async (req, res) => {
+  const { rows: clientRows } = await db.query('SELECT id FROM clients WHERE id = $1', [req.params.id]);
+  if (!clientRows[0]) return res.status(404).json({ error: 'not found' });
+  const { rows: labelRows } = await db.query('SELECT id FROM labels WHERE id = $1', [req.body.label_id]);
+  if (!labelRows[0]) return res.status(404).json({ error: 'label not found' });
 
-  db.prepare('INSERT OR IGNORE INTO client_labels (client_id, label_id) VALUES (?, ?)')
-    .run(req.params.id, req.body.label_id);
+  await db.query(
+    'INSERT INTO client_labels (client_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+    [req.params.id, req.body.label_id]
+  );
 
-  res.json(withExtras(db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id)));
+  const { rows } = await db.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+  res.json(await withExtras(rows[0]));
 });
 
-router.delete('/:id/labels/:labelId', (req, res) => {
-  db.prepare('DELETE FROM client_labels WHERE client_id = ? AND label_id = ?')
-    .run(req.params.id, req.params.labelId);
-  res.json(withExtras(db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id)));
+router.delete('/:id/labels/:labelId', async (req, res) => {
+  await db.query(
+    'DELETE FROM client_labels WHERE client_id = $1 AND label_id = $2',
+    [req.params.id, req.params.labelId]
+  );
+  const { rows } = await db.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+  res.json(await withExtras(rows[0]));
 });
 
-router.delete('/:id', (req, res) => {
-  db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
+router.delete('/:id', async (req, res) => {
+  await db.query('DELETE FROM clients WHERE id = $1', [req.params.id]);
   res.status(204).end();
 });
 
