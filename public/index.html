@@ -23,24 +23,46 @@
       <button class="toggle-btn active" data-pipeline="client">Clients</button>
       <button class="toggle-btn" data-pipeline="partner">Referral Partners</button>
     </div>
-    <button id="settingsBtn" class="btn btn-secondary">&#9881; Settings</button>
-    <button id="addBtn" class="btn btn-add">+ Add Client</button>
+    <button id="settingsBtn" class="btn btn-secondary">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="2.7" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.5v1.6M8 12.9v1.6M14.5 8h-1.6M3.1 8H1.5M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1M12.6 12.6l-1.1-1.1M4.5 4.5L3.4 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      <span>Settings</span>
+    </button>
+    <button id="addBtn" class="btn btn-add">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <span>Add Client</span>
+    </button>
+    <button id="logoutBtn" class="btn btn-secondary">Log Out</button>
   </div>
 </header>
 
 <div id="authView" class="auth-view hidden">
   <div class="auth-card">
-    <h2 id="authTitle">Sign In</h2>
-    <p id="authSubtitle" class="text-muted">Sign in to continue.</p>
-    <div id="demoHint" class="demo-hint hidden"></div>
+    <div id="authFormPanel">
+      <h2 id="authTitle">Sign In</h2>
+      <p id="authSubtitle" class="text-muted">Sign in to continue.</p>
+      <div id="demoHint" class="demo-hint hidden"></div>
 
-    <form id="authForm">
-      <label id="authNameField" class="hidden">Name <input type="text" id="auth_name" /></label>
-      <label>Email <input type="email" id="auth_email" autocomplete="username" required /></label>
-      <label>Password <input type="password" id="auth_password" autocomplete="current-password" required /></label>
-      <div id="authError" class="auth-error hidden"></div>
-      <button type="submit" class="btn btn-add" id="authSubmitBtn">Sign In</button>
-    </form>
+      <form id="authForm">
+        <label id="authNameField" class="hidden">Name <input type="text" id="auth_name" /></label>
+        <label>Email <input type="email" id="auth_email" autocomplete="username" required /></label>
+        <label>Password <input type="password" id="auth_password" autocomplete="current-password" required /></label>
+        <div id="authError" class="auth-error hidden"></div>
+        <div id="authInfo" class="auth-info hidden"></div>
+        <button type="submit" class="btn btn-add" id="authSubmitBtn">Sign In</button>
+        <button type="button" id="forgotPasswordBtn" class="link-btn">Forgot password?</button>
+      </form>
+    </div>
+
+    <div id="passwordResetPanel" class="hidden">
+      <h2>Set New Password</h2>
+      <p class="text-muted">Choose a new password for your account.</p>
+      <form id="passwordResetForm">
+        <label>New password <input type="password" id="reset_password" autocomplete="new-password" required /></label>
+        <label>Confirm new password <input type="password" id="reset_password_confirm" autocomplete="new-password" required /></label>
+        <div id="resetError" class="auth-error hidden"></div>
+        <button type="submit" class="btn btn-add" id="resetSubmitBtn">Set New Password</button>
+      </form>
+    </div>
   </div>
 </div>
 
@@ -85,15 +107,39 @@
 <div id="settingsView" class="settings-view hidden">
 
   <section class="settings-section">
-    <h2>Export</h2>
-    <p>Download every current client as a CSV file — useful for a quick spreadsheet copy or sharing with someone outside the app.</p>
-    <button id="settingsExportBtn" class="btn btn-add">Export CSV</button>
+    <h2>Labels</h2>
+    <p>Create labels to tag clients and referral partners with anything useful — VIP, First Home Buyer, needs financing, and so on.</p>
+    <div class="settings-row">
+      <input type="text" id="newLabelName" class="label-name-input" placeholder="Label name" />
+      <div class="color-swatch-picker" id="newLabelColorPicker"></div>
+      <button id="createLabelBtn" class="btn btn-add">Add Label</button>
+    </div>
+    <div id="labelsList" class="labels-list"></div>
+  </section>
+
+  <section class="settings-section hidden" id="usersSection">
+    <h2>Users</h2>
+    <p>Create logins for other people who need access to this CRM.</p>
+    <div class="field-group">
+      <label>Name <input type="text" id="newUserName" /></label>
+      <label>Email <input type="email" id="newUserEmail" /></label>
+      <label>Password <input type="password" id="newUserPassword" /></label>
+      <label>Role
+        <select id="newUserRole">
+          <option value="member">Member</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+    </div>
+    <button id="createUserBtn" class="btn btn-add">Create User</button>
+    <div id="usersList" class="labels-list"></div>
   </section>
 
   <section class="settings-section">
-    <h2>Import clients</h2>
-    <p>Import clients from a CSV export (e.g. GoHighLevel, another CRM, or a spreadsheet). Not sure of the format? Start from the template below.</p>
+    <h2>Import &amp; Export</h2>
+    <p>Export every current client to CSV, or import clients from a CSV export (e.g. GoHighLevel, another CRM, or a spreadsheet).</p>
     <div class="settings-row">
+      <button id="settingsExportBtn" class="btn btn-secondary">Export CSV</button>
       <a class="btn btn-secondary" href="/api/clients/import/template.csv" download>Download CSV template</a>
       <label class="btn btn-secondary file-input-label">
         Choose CSV file
@@ -127,51 +173,6 @@
     <div id="importResult" class="import-result hidden"></div>
   </section>
 
-  <section class="settings-section">
-    <h2>Labels</h2>
-    <p>Create labels to tag clients and referral partners with anything useful — VIP, First Home Buyer, needs financing, and so on.</p>
-    <div class="settings-row">
-      <input type="text" id="newLabelName" class="label-name-input" placeholder="Label name" />
-      <div class="color-swatch-picker" id="newLabelColorPicker"></div>
-      <button id="createLabelBtn" class="btn btn-add">Add Label</button>
-    </div>
-    <div id="labelsList" class="labels-list"></div>
-  </section>
-
-  <section class="settings-section">
-    <h2>Account</h2>
-    <p>Signed in as <strong id="accountCurrentName"></strong> (<span id="accountCurrentEmail"></span>).</p>
-    <div class="field-group">
-      <label>Name <input type="text" id="account_name" /></label>
-      <label>Email <input type="email" id="account_email" /></label>
-      <label>New password <input type="password" id="account_password" placeholder="Leave blank to keep current" /></label>
-      <label>Confirm new password <input type="password" id="account_password_confirm" /></label>
-    </div>
-    <div class="settings-row">
-      <button id="saveProfileBtn" class="btn btn-add">Save Profile</button>
-      <button id="logoutBtn" class="btn btn-secondary">Log Out</button>
-    </div>
-    <div id="profileResult" class="import-result hidden"></div>
-  </section>
-
-  <section class="settings-section hidden" id="usersSection">
-    <h2>Users</h2>
-    <p>Create logins for other people who need access to this CRM.</p>
-    <div class="field-group">
-      <label>Name <input type="text" id="newUserName" /></label>
-      <label>Email <input type="email" id="newUserEmail" /></label>
-      <label>Password <input type="password" id="newUserPassword" /></label>
-      <label>Role
-        <select id="newUserRole">
-          <option value="member">Member</option>
-          <option value="admin">Admin</option>
-        </select>
-      </label>
-    </div>
-    <button id="createUserBtn" class="btn btn-add">Create User</button>
-    <div id="usersList" class="labels-list"></div>
-  </section>
-
 </div>
 
 <!-- Add/Edit Client or Partner modal -->
@@ -179,7 +180,9 @@
   <div class="modal">
     <div class="modal-header">
       <h2 id="recordModalTitle">Add Client</h2>
-      <button class="modal-close" data-close="recordModal">&times;</button>
+      <button class="modal-close" data-close="recordModal">
+        <svg width="13" height="13" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
     </div>
     <form id="recordForm" class="modal-body">
       <input type="hidden" id="recordId" />
@@ -239,7 +242,9 @@
   <div class="modal modal-small">
     <div class="modal-header">
       <h2>Log Contact</h2>
-      <button class="modal-close" data-close="callModal">&times;</button>
+      <button class="modal-close" data-close="callModal">
+        <svg width="13" height="13" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      </button>
     </div>
     <form id="callForm" class="modal-body">
       <input type="hidden" id="call_client_id" />

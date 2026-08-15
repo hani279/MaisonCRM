@@ -22,6 +22,25 @@ const toggleSprings = {};
 
 const el = (id) => document.getElementById(id);
 
+// Inline SVG icons — kept as plain markup strings instead of unicode/emoji
+// glyphs (⚙ ☎ ← → ×), which render as full-color, platform-inconsistent
+// emoji in many fonts instead of a crisp icon matching the rest of the UI.
+const ICONS = {
+  gear: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="2.7" stroke="currentColor" stroke-width="1.3"/><path d="M8 1.5v1.6M8 12.9v1.6M14.5 8h-1.6M3.1 8H1.5M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1M12.6 12.6l-1.1-1.1M4.5 4.5L3.4 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  plus: '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+  arrowLeft: '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M11 7H3M3 7L6.5 3.5M3 7L6.5 10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  arrowRight: '<svg width="13" height="13" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7H11M11 7L7.5 3.5M11 7L7.5 10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  phone: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3.5 2h2l1 3-1.5 1.2a8 8 0 0 0 4.8 4.8L11 9.5l3 1v2a1.5 1.5 0 0 1-1.6 1.5A11.5 11.5 0 0 1 2 3.6 1.5 1.5 0 0 1 3.5 2Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/></svg>',
+  close: '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+};
+
+// refreshAll() fires several api() calls in parallel; if the session is bad,
+// every one of them gets a 401 around the same time. Without this guard each
+// one independently calls showAuthScreen('login') (which clears the error
+// banner as part of resetting the form), so whichever 401 resolves last wins
+// the race and wipes out the error message a moment after it appeared.
+let bouncingToLogin = false;
+
 async function api(url, opts) {
   const headers = { 'Content-Type': 'application/json' };
   if (window.supabaseClient) {
@@ -32,7 +51,10 @@ async function api(url, opts) {
   const res = await fetch(url, { headers, ...opts });
   if (res.status === 401 && !url.startsWith('/api/auth/')) {
     // Session expired mid-use — bounce back to the login screen instead of a raw error.
-    showAuthScreen('login');
+    if (!bouncingToLogin) {
+      bouncingToLogin = true;
+      showAuthScreen('login');
+    }
     throw new Error('Session expired — please sign in again.');
   }
   if (!res.ok) {
@@ -155,7 +177,7 @@ function render() {
 
   if (!isClient) {
     setPageHeader('Referred Partners', '');
-    el('addBtn').textContent = '+ Add Partner';
+    el('addBtn').innerHTML = `${ICONS.plus} <span>Add Partner</span>`;
 
     const matchesSearch = (r) => [r.company_name, r.contact_name, r.mobile, r.email].join(' ').toLowerCase().includes(q);
     const filtered = state.partners.filter((r) => (!q || matchesSearch(r)) && matchesFilters(r, false));
@@ -166,7 +188,7 @@ function render() {
 
   const [title, subtitle] = VIEW_COPY[state.clientView];
   setPageHeader(title, subtitle);
-  el('addBtn').textContent = '+ Add Client';
+  el('addBtn').innerHTML = `${ICONS.plus} <span>Add Client</span>`;
 
   const matchesSearch = (c) => [c.name, c.phone, c.email, c.budget_label].join(' ').toLowerCase().includes(q);
 
@@ -346,9 +368,9 @@ function renderClientCard(client, stageIndex) {
     ${nextAction}
     ${lastContact}
     <div class="card-actions">
-      <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst ? 'disabled' : ''}>&larr; Back</button>
-      <button class="card-icon-btn" data-action="log-call" title="Log call/text/voicemail">☎</button>
-      <button class="btn btn-add btn-tiny" data-action="next" ${isLast ? 'disabled' : ''}>Next &rarr;</button>
+      <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst ? 'disabled' : ''}>${ICONS.arrowLeft} Back</button>
+      <button class="card-icon-btn" data-action="log-call" title="Log call/text/voicemail">${ICONS.phone}</button>
+      <button class="btn btn-add btn-tiny" data-action="next" ${isLast ? 'disabled' : ''}>Next ${ICONS.arrowRight}</button>
     </div>
   `;
 
@@ -377,8 +399,8 @@ function renderPartnerCard(partner, stageIndex) {
     ${renderLabelChips(partner.labels)}
     <div class="partner-count">${partner.referred_client_count} client${partner.referred_client_count === 1 ? '' : 's'} referred</div>
     <div class="card-actions">
-      <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst ? 'disabled' : ''}>&larr; Back</button>
-      <button class="btn btn-add btn-tiny" data-action="next" ${isLast ? 'disabled' : ''}>Next &rarr;</button>
+      <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst ? 'disabled' : ''}>${ICONS.arrowLeft} Back</button>
+      <button class="btn btn-add btn-tiny" data-action="next" ${isLast ? 'disabled' : ''}>Next ${ICONS.arrowRight}</button>
     </div>
   `;
 
@@ -407,8 +429,8 @@ function renderCompletedClientCard(client) {
     ${renderLabelChips(client.labels)}
     ${lastContact}
     <div class="card-actions">
-      <button class="btn btn-secondary btn-tiny" data-action="back">&larr; Back</button>
-      <button class="card-icon-btn" data-action="log-call" title="Log call/text/voicemail">☎</button>
+      <button class="btn btn-secondary btn-tiny" data-action="back">${ICONS.arrowLeft} Back</button>
+      <button class="card-icon-btn" data-action="log-call" title="Log call/text/voicemail">${ICONS.phone}</button>
       <button class="btn btn-secondary btn-tiny" data-action="archive">Archive</button>
     </div>
   `;
@@ -950,7 +972,9 @@ function setPage(page) {
   state.page = page;
   const isSettings = page === 'settings';
 
-  el('settingsBtn').textContent = isSettings ? '← Back to Pipeline' : '⚙ Settings';
+  el('settingsBtn').innerHTML = isSettings
+    ? `${ICONS.arrowLeft} <span>Back to Pipeline</span>`
+    : `${ICONS.gear} <span>Settings</span>`;
   el('addBtn').classList.toggle('hidden', isSettings);
   el('pipelineToggle').classList.toggle('hidden', isSettings);
   el('toolbar').classList.toggle('hidden', isSettings);
@@ -975,53 +999,17 @@ function loadSettingsPanel() {
 
   renderColorSwatchPicker();
   renderLabelsList();
-  loadAccountPanel();
+  loadUsersSection();
 }
 
-// ---------- Settings: Account + Users ----------
+// ---------- Settings: Users ----------
 
-function loadAccountPanel() {
+function loadUsersSection() {
   const user = state.currentUser;
   if (!user) return;
 
-  el('accountCurrentName').textContent = user.name;
-  el('accountCurrentEmail').textContent = user.email;
-  el('account_name').value = user.name;
-  el('account_email').value = user.email;
-  el('account_password').value = '';
-  el('account_password_confirm').value = '';
-  el('profileResult').classList.add('hidden');
-
   el('usersSection').classList.toggle('hidden', user.role !== 'admin');
   if (user.role === 'admin') loadUsersList();
-}
-
-async function saveProfile() {
-  const password = el('account_password').value;
-  const confirmPassword = el('account_password_confirm').value;
-  if (password && password !== confirmPassword) {
-    alert('Passwords do not match.');
-    return;
-  }
-
-  const name = el('account_name').value.trim();
-  const email = el('account_email').value.trim();
-  const payload = { email, data: { name, role: state.currentUser.role } };
-  if (password) payload.password = password;
-
-  try {
-    const { data, error } = await window.supabaseClient.auth.updateUser(payload);
-    if (error) throw error;
-    state.currentUser = toAppUser(data.user);
-    el('accountCurrentName').textContent = state.currentUser.name;
-    el('accountCurrentEmail').textContent = state.currentUser.email;
-    el('account_password').value = '';
-    el('account_password_confirm').value = '';
-    el('profileResult').textContent = 'Profile updated.';
-    el('profileResult').classList.remove('hidden');
-  } catch (err) {
-    alert('Could not update profile: ' + err.message);
-  }
 }
 
 async function logout() {
@@ -1040,8 +1028,8 @@ async function loadUsersList() {
 
   el('usersList').innerHTML = users.map((u) => `
     <div class="label-row">
-      ${escapeHtml(u.name)} — ${escapeHtml(u.email)} (${u.role})
-      ${u.id !== state.currentUser.id ? `<button type="button" class="label-delete-btn" data-user-id="${u.id}" title="Delete user">&times;</button>` : ''}
+      ${escapeHtml(u.name)} (${u.role}${u.id === state.currentUser.id ? ' · you' : ''})
+      ${u.id !== state.currentUser.id ? `<button type="button" class="label-delete-btn" data-user-id="${u.id}" title="Delete user">${ICONS.close}</button>` : ''}
     </div>
   `).join('');
 
@@ -1103,7 +1091,7 @@ function renderLabelsList() {
     <div class="label-row">
       <span class="label-swatch-dot" style="background:${l.color};"></span>
       ${escapeHtml(l.name)}
-      <button type="button" class="label-delete-btn" data-label-id="${l.id}" title="Delete label">&times;</button>
+      <button type="button" class="label-delete-btn" data-label-id="${l.id}" title="Delete label">${ICONS.close}</button>
     </div>
   `).join('');
   container.querySelectorAll('.label-delete-btn').forEach((btn) => {
@@ -1248,7 +1236,6 @@ function initEventListeners() {
 
   el('commitImportBtn').addEventListener('click', commitImport);
   el('createLabelBtn').addEventListener('click', createLabel);
-  el('saveProfileBtn').addEventListener('click', saveProfile);
   el('logoutBtn').addEventListener('click', logout);
   el('createUserBtn').addEventListener('click', createUser);
 
@@ -1312,6 +1299,8 @@ function showAuthScreen(mode) {
   state.currentUser = null;
 
   el('authView').classList.remove('hidden');
+  el('authFormPanel').classList.remove('hidden');
+  el('passwordResetPanel').classList.add('hidden');
   el('topbarActions').classList.add('hidden');
   el('toolbar').classList.add('hidden');
   el('clientViewTabs').classList.add('hidden');
@@ -1328,7 +1317,9 @@ function showAuthScreen(mode) {
   el('authNameField').classList.toggle('hidden', mode !== 'setup');
   el('auth_name').required = mode === 'setup';
   el('authSubmitBtn').textContent = mode === 'setup' ? 'Create Account' : 'Sign In';
+  el('forgotPasswordBtn').classList.toggle('hidden', mode !== 'login');
   el('authError').classList.add('hidden');
+  el('authInfo').classList.add('hidden');
   el('auth_email').value = '';
   el('auth_password').value = '';
 
@@ -1340,6 +1331,79 @@ function showAuthScreen(mode) {
         el('demoHint').classList.remove('hidden');
       }
     }).catch(() => {});
+  }
+}
+
+async function handleForgotPassword() {
+  const email = el('auth_email').value.trim();
+  el('authError').classList.add('hidden');
+  el('authInfo').classList.add('hidden');
+
+  if (!email) {
+    el('authError').textContent = 'Enter your email above first.';
+    el('authError').classList.remove('hidden');
+    return;
+  }
+
+  try {
+    const { error } = await window.supabaseClient.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+    if (error) throw error;
+    el('authInfo').textContent = 'Check your email for a password reset link.';
+    el('authInfo').classList.remove('hidden');
+  } catch (err) {
+    el('authError').textContent = err.message;
+    el('authError').classList.remove('hidden');
+  }
+}
+
+function showPasswordResetForm() {
+  el('authView').classList.remove('hidden');
+  el('authFormPanel').classList.add('hidden');
+  el('passwordResetPanel').classList.remove('hidden');
+  el('topbarActions').classList.add('hidden');
+  el('toolbar').classList.add('hidden');
+  el('clientViewTabs').classList.add('hidden');
+  el('board').classList.add('hidden');
+  el('listView').classList.add('hidden');
+  el('settingsView').classList.add('hidden');
+  el('filterPanel').classList.add('hidden');
+  setPageHeader('Client Pipeline', '');
+
+  el('reset_password').value = '';
+  el('reset_password_confirm').value = '';
+  el('resetError').classList.add('hidden');
+}
+
+async function submitPasswordReset(evt) {
+  evt.preventDefault();
+  el('resetError').classList.add('hidden');
+
+  const password = el('reset_password').value;
+  const confirmPassword = el('reset_password_confirm').value;
+
+  if (password.length < 8) {
+    el('resetError').textContent = 'Password must be at least 8 characters.';
+    el('resetError').classList.remove('hidden');
+    return;
+  }
+  if (password !== confirmPassword) {
+    el('resetError').textContent = 'Passwords do not match.';
+    el('resetError').classList.remove('hidden');
+    return;
+  }
+
+  try {
+    const { error } = await window.supabaseClient.auth.updateUser({ password });
+    if (error) throw error;
+    await window.supabaseClient.auth.signOut();
+    showAuthScreen('login');
+    el('authInfo').textContent = 'Password updated — sign in with your new password.';
+    el('authInfo').classList.remove('hidden');
+  } catch (err) {
+    el('resetError').textContent = err.message;
+    el('resetError').classList.remove('hidden');
   }
 }
 
@@ -1355,8 +1419,21 @@ async function showApp() {
     .catch(() => {});
 }
 
+// A login can be valid at the Supabase Auth level but belong to the *other*
+// deployment (real app vs demo) — they share one Supabase project. Checking
+// this proactively, right after sign-in, gives one clear error message
+// instead of a cascade of 401s from every parallel data-load request.
+async function isValidForThisDeployment(user) {
+  const meta = await fetch('/api/meta').then((r) => r.json()).catch(() => ({ demo: false }));
+  const expectedSchema = meta.demo ? 'demo' : 'public';
+  return !!(user.user_metadata && user.user_metadata.schema === expectedSchema);
+}
+
 async function checkAuthAndInit() {
   await window.supabaseReady;
+
+  window.onPasswordRecovery = showPasswordResetForm;
+  if (window.pendingPasswordRecovery) return showPasswordResetForm();
 
   let status;
   try {
@@ -1372,6 +1449,12 @@ async function checkAuthAndInit() {
   const { data } = await window.supabaseClient.auth.getSession();
   if (!data.session) return showAuthScreen('login');
 
+  if (!(await isValidForThisDeployment(data.session.user))) {
+    await window.supabaseClient.auth.signOut();
+    return showAuthScreen('login');
+  }
+
+  bouncingToLogin = false;
   state.currentUser = toAppUser(data.session.user);
   showApp();
 }
@@ -1394,6 +1477,12 @@ async function submitAuthForm(evt) {
     const { data, error } = await window.supabaseClient.auth.signInWithPassword({ email, password });
     if (error) throw error;
 
+    if (!(await isValidForThisDeployment(data.user))) {
+      await window.supabaseClient.auth.signOut();
+      throw new Error('That login is not valid for this deployment.');
+    }
+
+    bouncingToLogin = false;
     state.currentUser = toAppUser(data.user);
     await showApp();
   } catch (err) {
@@ -1404,4 +1493,6 @@ async function submitAuthForm(evt) {
 
 initEventListeners();
 el('authForm').addEventListener('submit', submitAuthForm);
+el('forgotPasswordBtn').addEventListener('click', handleForgotPassword);
+el('passwordResetForm').addEventListener('submit', submitPasswordReset);
 checkAuthAndInit();
