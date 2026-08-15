@@ -2,6 +2,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
+const { createClient } = require('@supabase/supabase-js');
 
 const CLIENT_STAGES = [
   'Initial Consultation',
@@ -43,6 +44,33 @@ async function seedStages(client, pipeline, names) {
   console.log(`  seeded ${names.length} ${pipeline} stages.`);
 }
 
+// Backfills the users table (added after some deployments already had
+// accounts) from Supabase Auth, and keeps it in sync if it's ever out of
+// step. Auth is project-wide, not schema-scoped, so this only pulls in users
+// tagged for the target schema — same filter routes/users.js uses.
+async function syncUsers(client, targetSchema) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.log('  SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY not set, skipping user sync.');
+    return;
+  }
+  const supabaseAdmin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const { data, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+  if (error) throw error;
+
+  const users = data.users.filter((u) => u.user_metadata && u.user_metadata.schema === targetSchema);
+  for (const u of users) {
+    await client.query(
+      `INSERT INTO users (id, name, email, role)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email, role = EXCLUDED.role`,
+      [u.id, (u.user_metadata && u.user_metadata.name) || '', u.email, (u.user_metadata && u.user_metadata.role) || 'member']
+    );
+  }
+  console.log(`  synced ${users.length} user(s) into "${targetSchema}".`);
+}
+
 async function main() {
   const targetSchema = process.argv[2];
   if (!targetSchema || !/^[a-z_][a-z0-9_]*$/.test(targetSchema)) {
@@ -67,6 +95,7 @@ async function main() {
 
     await seedStages(client, 'client', CLIENT_STAGES);
     await seedStages(client, 'partner', PARTNER_STAGES);
+    await syncUsers(client, targetSchema);
 
     console.log(`Done. Schema "${targetSchema}" is ready.`);
   } finally {

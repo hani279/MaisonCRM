@@ -52,7 +52,15 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: error.message });
   }
 
-  res.status(201).json(publicUser(data.user));
+  const created = publicUser(data.user);
+  await db.query('INSERT INTO users (id, name, email, role) VALUES ($1, $2, $3, $4)', [
+    created.id,
+    created.name,
+    created.email,
+    created.role,
+  ]);
+
+  res.status(201).json(created);
 });
 
 router.delete('/:id', async (req, res) => {
@@ -65,6 +73,7 @@ router.delete('/:id', async (req, res) => {
   }
   const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
   if (error) return res.status(400).json({ error: error.message });
+  await db.query('DELETE FROM users WHERE id = $1', [req.params.id]);
   res.status(204).end();
 });
 

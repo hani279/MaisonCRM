@@ -58,6 +58,20 @@ CREATE TABLE IF NOT EXISTS app_meta (
   value TEXT
 );
 
+-- Mirrors the subset of each Supabase Auth user (scoped to this schema, see
+-- routes/users.js) that's useful to have as a normal queryable/joinable row
+-- rather than locked inside Auth's own auth.users table. Kept in sync by the
+-- app on create/delete; it is a mirror, not the source of truth — Auth stays
+-- authoritative for login. id matches the Auth user's id (no FK: auth.users
+-- lives in a different Postgres schema).
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS labels (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -84,6 +98,7 @@ CREATE INDEX IF NOT EXISTS idx_client_labels_label ON client_labels(label_id);
 CREATE INDEX IF NOT EXISTS idx_partner_labels_label ON partner_labels(label_id);
 
 ALTER TABLE app_meta ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pipeline_stages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE partners ENABLE ROW LEVEL SECURITY;
 ALTER TABLE clients ENABLE ROW LEVEL SECURITY;

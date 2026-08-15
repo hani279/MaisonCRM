@@ -45,6 +45,12 @@ router.post('/setup', async (req, res) => {
   await db.query(
     "INSERT INTO app_meta (key, value) VALUES ('admin_created', 'true') ON CONFLICT (key) DO UPDATE SET value = 'true'"
   );
+  await db.query('INSERT INTO users (id, name, email, role) VALUES ($1, $2, $3, $4)', [
+    data.user.id,
+    name.trim(),
+    data.user.email,
+    'admin',
+  ]);
 
   res.status(201).json({ id: data.user.id, name: name.trim(), email: data.user.email, role: 'admin' });
 });
