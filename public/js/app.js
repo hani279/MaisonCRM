@@ -2,7 +2,7 @@ const state = {
   page: 'pipeline', // 'pipeline' | 'settings'
   pipeline: 'client',
   clientView: 'board', // 'board' | 'completed' | 'archived'
-  stages: [],
+  stagesByPipeline: { client: [], partner: [] },
   clients: [],
   archivedClients: [],
   partners: [],
@@ -93,7 +93,13 @@ function callTypeLabel(type) {
 // ---------- Loading ----------
 
 async function loadStages() {
-  state.stages = await api(`/api/stages?pipeline=${state.pipeline}`);
+  // Stages have no edit UI (fixed at schema-init time), so both pipelines'
+  // lists are loaded once up front and cached — never refetched on toggle.
+  const [client, partner] = await Promise.all([
+    api('/api/stages?pipeline=client'),
+    api('/api/stages?pipeline=partner'),
+  ]);
+  state.stagesByPipeline = { client, partner };
 }
 
 async function loadClients() {
@@ -112,15 +118,13 @@ async function loadLabels() {
   state.labels = await api('/api/labels');
 }
 
+// Full load — only needed once, right after sign-in. Both pipelines' clients
+// and partners are kept in state together so switching the toggle afterward
+// is a synchronous re-render, not a network round trip (see the pipelineToggle
+// click handler).
 async function refreshAll() {
-  await Promise.all([loadStages(), loadLabels()]);
-  if (state.pipeline === 'client') {
-    const loads = [loadClients(), loadPartners()];
-    if (state.clientView === 'archived') loads.push(loadArchivedClients());
-    await Promise.all(loads);
-  } else {
-    await loadPartners();
-  }
+  await Promise.all([loadStages(), loadLabels(), loadClients(), loadPartners()]);
+  if (state.clientView === 'archived') await loadArchivedClients();
   render();
 }
 
@@ -143,7 +147,7 @@ function renderKanban(records, isClient) {
   el('listView').classList.add('hidden');
   const board = el('board');
   board.innerHTML = '';
-  state.stages.forEach((stage, i) => {
+  state.stagesByPipeline[state.pipeline].forEach((stage, i) => {
     const stageRecords = records.filter((r) => r.stage_id === stage.id);
     board.appendChild(renderColumn(stage, i, stageRecords, isClient));
   });
@@ -203,7 +207,8 @@ function render() {
   el('listView').classList.remove('hidden');
 
   if (state.clientView === 'completed') {
-    const lastStage = state.stages[state.stages.length - 1];
+    const clientStages = state.stagesByPipeline.client;
+    const lastStage = clientStages[clientStages.length - 1];
     const filtered = (lastStage ? state.clients.filter((c) => c.stage_id === lastStage.id) : [])
       .filter((c) => (!q || matchesSearch(c)) && matchesFilters(c, true));
     renderListView(filtered, 'completed');
@@ -357,7 +362,7 @@ function renderClientCard(client, stageIndex) {
     : '';
 
   const isFirst = stageIndex === 0;
-  const isLast = stageIndex === state.stages.length - 1;
+  const isLast = stageIndex === state.stagesByPipeline.client.length - 1;
 
   card.innerHTML = `
     <div class="card-top">
@@ -389,7 +394,7 @@ function renderPartnerCard(partner, stageIndex) {
 
   const metaParts = [partner.mobile, partner.email].filter(Boolean).join(' · ');
   const isFirst = stageIndex === 0;
-  const isLast = stageIndex === state.stages.length - 1;
+  const isLast = stageIndex === state.stagesByPipeline.partner.length - 1;
 
   card.innerHTML = `
     <div class="card-top">
@@ -1251,9 +1256,9 @@ function initEventListeners() {
   });
   el('clearFiltersBtn').addEventListener('click', clearFilters);
 
-  el('pipelineToggle').addEventListener('click', async (e) => {
+  el('pipelineToggle').addEventListener('click', (e) => {
     const btn = e.target.closest('.toggle-btn');
-    if (!btn) return;
+    if (!btn || btn.dataset.pipeline === state.pipeline) return;
     document.querySelectorAll('.toggle-btn').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
     el('pipelineToggle').classList.toggle('is-partner', btn.dataset.pipeline === 'partner');
@@ -1262,7 +1267,11 @@ function initEventListeners() {
     state.clientView = 'board';
     state.search = '';
     el('searchInput').value = '';
-    await refreshAll();
+    // Clients/partners/stages are all already in state from the initial load,
+    // so the switch itself is an instant re-render — no network wait. Refresh
+    // in the background afterward to pick up any changes made elsewhere.
+    render();
+    Promise.all([loadClients(), loadPartners()]).then(render).catch(() => {});
   });
 
   el('clientViewTabs').addEventListener('click', async (e) => {
