@@ -20,6 +20,31 @@ const state = {
 const modalMotion = {};
 const toggleSprings = {};
 
+// Record ids with a move request in flight — a card stays out of this set
+// once its optimistic move lands or reverts, and while in it, further move
+// clicks for that same id are ignored so two overlapping "move to next
+// stage" requests can't land the client two stages over instead of one.
+const pendingMoveIds = new Set();
+
+// Same idea as pendingMoveIds, for the archive/restore/permanently-delete
+// buttons on Completed/Archived list rows (no confirm() dialog guards those
+// first two, so a fast double-click could otherwise fire the request twice).
+const pendingActionIds = new Set();
+
+function resortClients() {
+  const stages = state.stagesByPipeline.client;
+  const positionOf = (stageId) => (stages.find((s) => s.id === stageId) || {}).position || 0;
+  state.clients.sort((a, b) => positionOf(a.stage_id) - positionOf(b.stage_id) || a.name.localeCompare(b.name));
+}
+
+function resortPartners() {
+  const stages = state.stagesByPipeline.partner;
+  const positionOf = (stageId) => (stages.find((s) => s.id === stageId) || {}).position || 0;
+  state.partners.sort(
+    (a, b) => positionOf(a.stage_id) - positionOf(b.stage_id) || (a.contact_name || '').localeCompare(b.contact_name || '')
+  );
+}
+
 const el = (id) => document.getElementById(id);
 
 // Inline SVG icons — kept as plain markup strings instead of unicode/emoji
@@ -363,6 +388,7 @@ function renderClientCard(client, stageIndex) {
 
   const isFirst = stageIndex === 0;
   const isLast = stageIndex === state.stagesByPipeline.client.length - 1;
+  const moving = pendingMoveIds.has(client.id);
 
   card.innerHTML = `
     <div class="card-top">
@@ -373,9 +399,9 @@ function renderClientCard(client, stageIndex) {
     ${nextAction}
     ${lastContact}
     <div class="card-actions">
-      <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst ? 'disabled' : ''}>${ICONS.arrowLeft} Back</button>
+      <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst || moving ? 'disabled' : ''}>${ICONS.arrowLeft} Back</button>
       <button class="card-icon-btn" data-action="log-call" title="Log call/text/voicemail">${ICONS.phone}</button>
-      <button class="btn btn-add btn-tiny" data-action="next" ${isLast ? 'disabled' : ''}>Next ${ICONS.arrowRight}</button>
+      <button class="btn btn-add btn-tiny" data-action="next" ${isLast || moving ? 'disabled' : ''}>Next ${ICONS.arrowRight}</button>
     </div>
   `;
 
@@ -395,6 +421,7 @@ function renderPartnerCard(partner, stageIndex) {
   const metaParts = [partner.mobile, partner.email].filter(Boolean).join(' · ');
   const isFirst = stageIndex === 0;
   const isLast = stageIndex === state.stagesByPipeline.partner.length - 1;
+  const moving = pendingMoveIds.has(partner.id);
 
   card.innerHTML = `
     <div class="card-top">
@@ -404,8 +431,8 @@ function renderPartnerCard(partner, stageIndex) {
     ${renderLabelChips(partner.labels)}
     <div class="partner-count">${partner.referred_client_count} client${partner.referred_client_count === 1 ? '' : 's'} referred</div>
     <div class="card-actions">
-      <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst ? 'disabled' : ''}>${ICONS.arrowLeft} Back</button>
-      <button class="btn btn-add btn-tiny" data-action="next" ${isLast ? 'disabled' : ''}>Next ${ICONS.arrowRight}</button>
+      <button class="btn btn-secondary btn-tiny" data-action="back" ${isFirst || moving ? 'disabled' : ''}>${ICONS.arrowLeft} Back</button>
+      <button class="btn btn-add btn-tiny" data-action="next" ${isLast || moving ? 'disabled' : ''}>Next ${ICONS.arrowRight}</button>
     </div>
   `;
 
@@ -425,6 +452,7 @@ function renderCompletedClientCard(client) {
   const lastContact = client.last_contact
     ? `<div class="last-contact">Last contact: ${callTypeLabel(client.last_contact.type)} · ${formatRelative(client.last_contact.logged_at)}</div>`
     : '';
+  const busy = pendingMoveIds.has(client.id) || pendingActionIds.has(client.id);
 
   card.innerHTML = `
     <div class="card-top">
@@ -434,9 +462,9 @@ function renderCompletedClientCard(client) {
     ${renderLabelChips(client.labels)}
     ${lastContact}
     <div class="card-actions">
-      <button class="btn btn-secondary btn-tiny" data-action="back">${ICONS.arrowLeft} Back</button>
+      <button class="btn btn-secondary btn-tiny" data-action="back" ${busy ? 'disabled' : ''}>${ICONS.arrowLeft} Back</button>
       <button class="card-icon-btn" data-action="log-call" title="Log call/text/voicemail">${ICONS.phone}</button>
-      <button class="btn btn-secondary btn-tiny" data-action="archive">Archive</button>
+      <button class="btn btn-secondary btn-tiny" data-action="archive" ${busy ? 'disabled' : ''}>Archive</button>
     </div>
   `;
 
@@ -454,6 +482,7 @@ function renderArchivedClientCard(client) {
   card.dataset.recordId = client.id;
 
   const metaParts = [client.phone, client.budget_label].filter(Boolean).join(' · ');
+  const busy = pendingActionIds.has(client.id);
 
   card.innerHTML = `
     <div class="card-top">
@@ -463,8 +492,8 @@ function renderArchivedClientCard(client) {
     ${renderLabelChips(client.labels)}
     <div class="last-contact">Archived ${formatRelative(client.archived_at)}</div>
     <div class="card-actions">
-      <button class="btn btn-add btn-tiny" data-action="restore">Restore</button>
-      <button class="btn btn-danger btn-tiny" data-action="delete">Delete</button>
+      <button class="btn btn-add btn-tiny" data-action="restore" ${busy ? 'disabled' : ''}>Restore</button>
+      <button class="btn btn-danger btn-tiny" data-action="delete" ${busy ? 'disabled' : ''}>Delete</button>
     </div>
   `;
 
@@ -522,40 +551,111 @@ function renderLabelChips(labels) {
 // ---------- Move actions ----------
 
 async function moveClient(id, direction) {
-  await api(`/api/clients/${id}/move`, { method: 'PATCH', body: JSON.stringify({ direction }) });
-  await loadClients();
+  if (pendingMoveIds.has(id)) return;
+  const client = state.clients.find((c) => c.id === id);
+  if (!client) return;
+  const stages = state.stagesByPipeline.client;
+  const currentIndex = stages.findIndex((s) => s.id === client.stage_id);
+  const targetStage = stages[direction === 'next' ? currentIndex + 1 : currentIndex - 1];
+  if (!targetStage) return;
+
+  const previousStageId = client.stage_id;
+  pendingMoveIds.add(id);
+  client.stage_id = targetStage.id;
+  resortClients();
   state.lastTouchedId = id;
   render();
+
+  try {
+    await api(`/api/clients/${id}/move`, { method: 'PATCH', body: JSON.stringify({ direction }) });
+  } catch (err) {
+    client.stage_id = previousStageId;
+    resortClients();
+    alert('Could not move client: ' + err.message);
+  } finally {
+    pendingMoveIds.delete(id);
+    render();
+  }
 }
 
 async function movePartner(id, direction) {
-  await api(`/api/partners/${id}/move`, { method: 'PATCH', body: JSON.stringify({ direction }) });
-  await loadPartners();
+  if (pendingMoveIds.has(id)) return;
+  const partner = state.partners.find((p) => p.id === id);
+  if (!partner) return;
+  const stages = state.stagesByPipeline.partner;
+  const currentIndex = stages.findIndex((s) => s.id === partner.stage_id);
+  const targetStage = stages[direction === 'next' ? currentIndex + 1 : currentIndex - 1];
+  if (!targetStage) return;
+
+  const previousStageId = partner.stage_id;
+  pendingMoveIds.add(id);
+  partner.stage_id = targetStage.id;
+  resortPartners();
   state.lastTouchedId = id;
   render();
+
+  try {
+    await api(`/api/partners/${id}/move`, { method: 'PATCH', body: JSON.stringify({ direction }) });
+  } catch (err) {
+    partner.stage_id = previousStageId;
+    resortPartners();
+    alert('Could not move partner: ' + err.message);
+  } finally {
+    pendingMoveIds.delete(id);
+    render();
+  }
 }
 
 // ---------- Archive / restore ----------
 
 async function archiveClient(id) {
-  await api(`/api/clients/${id}/archive`, { method: 'PATCH' });
-  await loadClients();
+  if (pendingActionIds.has(id)) return;
+  pendingActionIds.add(id);
   render();
+  try {
+    await api(`/api/clients/${id}/archive`, { method: 'PATCH' });
+    state.clients = state.clients.filter((c) => c.id !== id);
+  } catch (err) {
+    alert('Could not archive: ' + err.message);
+  } finally {
+    pendingActionIds.delete(id);
+    render();
+  }
 }
 
 async function restoreClient(id) {
-  await api(`/api/clients/${id}/restore`, { method: 'PATCH' });
-  state.clientView = 'board';
-  state.lastTouchedId = id;
-  await loadClients();
+  if (pendingActionIds.has(id)) return;
+  pendingActionIds.add(id);
   render();
+  try {
+    const saved = await api(`/api/clients/${id}/restore`, { method: 'PATCH' });
+    state.clients.push(saved);
+    resortClients();
+    state.archivedClients = state.archivedClients.filter((c) => c.id !== id);
+    state.clientView = 'board';
+    state.lastTouchedId = id;
+  } catch (err) {
+    alert('Could not restore: ' + err.message);
+  } finally {
+    pendingActionIds.delete(id);
+    render();
+  }
 }
 
 async function deleteArchivedClient(id) {
+  if (pendingActionIds.has(id)) return;
   if (!confirm('Permanently delete this client? This cannot be undone.')) return;
-  await api(`/api/clients/${id}`, { method: 'DELETE' });
-  await loadArchivedClients();
+  pendingActionIds.add(id);
   render();
+  try {
+    await api(`/api/clients/${id}`, { method: 'DELETE' });
+    state.archivedClients = state.archivedClients.filter((c) => c.id !== id);
+  } catch (err) {
+    alert('Could not delete: ' + err.message);
+  } finally {
+    pendingActionIds.delete(id);
+    render();
+  }
 }
 
 async function toggleArchiveFromModal() {
@@ -563,22 +663,32 @@ async function toggleArchiveFromModal() {
   if (!id) return;
   const wasArchived = modalClientArchived;
   const endpoint = wasArchived ? 'restore' : 'archive';
-  await api(`/api/clients/${id}/${endpoint}`, { method: 'PATCH' });
 
-  if (wasArchived) {
-    // Restoring should always land you back on the live board, not the now-empty Archived tab.
-    state.clientView = 'board';
-    state.lastTouchedId = Number(id);
-    await loadClients();
-  } else {
-    await Promise.all([
-      loadClients(),
-      state.clientView === 'archived' ? loadArchivedClients() : Promise.resolve(null),
-    ]);
+  const btn = el('archiveRecordBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+
+  try {
+    const saved = await api(`/api/clients/${id}/${endpoint}`, { method: 'PATCH' });
+
+    if (wasArchived) {
+      // Restoring should always land you back on the live board, not the now-empty Archived tab.
+      state.clients.push(saved);
+      resortClients();
+      state.archivedClients = state.archivedClients.filter((c) => c.id !== saved.id);
+      state.clientView = 'board';
+      state.lastTouchedId = saved.id;
+    } else {
+      state.clients = state.clients.filter((c) => c.id !== saved.id);
+      if (state.clientView === 'archived') await loadArchivedClients();
+    }
+
+    closeModal('recordModal');
+    render();
+  } catch (err) {
+    btn.disabled = false;
+    alert('Could not update: ' + err.message);
   }
-
-  closeModal('recordModal');
-  render();
 }
 
 // ---------- Add/Edit modal ----------
@@ -785,46 +895,73 @@ function openPartnerModal(partner) {
 
 async function submitRecordForm(evt) {
   evt.preventDefault();
-  const type = el('recordForm').dataset.type;
-  const id = el('recordId').value;
+  const submitBtn = el('recordForm').querySelector('button[type="submit"]');
+  if (submitBtn.disabled) return; // already saving — ignore a repeat click/Enter
+  submitBtn.disabled = true;
 
-  if (type === 'client') {
-    const payload = {
-      name: el('f_name').value,
-      phone: el('f_phone').value,
-      email: el('f_email').value,
-      budget_label: computeBudgetLabel(),
-      status: el('f_status').value,
-      next_action_label: el('f_next_action_label').value,
-      next_action_date: el('f_next_action_date').value,
-      referred_by_partner_id: el('f_referred_by_partner_id').value || null,
-      referral_fee_note: el('f_referral_fee_note').value,
-      notes: el('f_notes').value,
-    };
-    const saved = id
-      ? await api(`/api/clients/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
-      : await api('/api/clients', { method: 'POST', body: JSON.stringify(payload) });
-    await syncRecordLabels('client', saved.id);
-    state.lastTouchedId = saved.id;
-    await loadClients();
-  } else {
-    const payload = {
-      company_name: el('p_company_name').value,
-      contact_name: el('p_contact_name').value,
-      mobile: el('p_mobile').value,
-      email: el('p_email').value,
-      notes: el('p_notes').value,
-    };
-    const saved = id
-      ? await api(`/api/partners/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
-      : await api('/api/partners', { method: 'POST', body: JSON.stringify(payload) });
-    await syncRecordLabels('partner', saved.id);
-    state.lastTouchedId = saved.id;
-    await loadPartners();
+  try {
+    const type = el('recordForm').dataset.type;
+    const id = el('recordId').value;
+    // Built from selectedLabelIds rather than re-fetched, since the create/update
+    // response reflects labels from *before* syncRecordLabels runs.
+    const labels = [...selectedLabelIds]
+      .map((labelId) => state.labels.find((l) => l.id === labelId))
+      .filter(Boolean)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (type === 'client') {
+      const payload = {
+        name: el('f_name').value,
+        phone: el('f_phone').value,
+        email: el('f_email').value,
+        budget_label: computeBudgetLabel(),
+        status: el('f_status').value,
+        next_action_label: el('f_next_action_label').value,
+        next_action_date: el('f_next_action_date').value,
+        referred_by_partner_id: el('f_referred_by_partner_id').value || null,
+        referral_fee_note: el('f_referral_fee_note').value,
+        notes: el('f_notes').value,
+      };
+      const saved = id
+        ? await api(`/api/clients/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+        : await api('/api/clients', { method: 'POST', body: JSON.stringify(payload) });
+      await syncRecordLabels('client', saved.id);
+      saved.labels = labels;
+
+      const idx = state.clients.findIndex((c) => c.id === saved.id);
+      if (idx >= 0) state.clients[idx] = saved;
+      else state.clients.push(saved);
+      resortClients();
+      state.lastTouchedId = saved.id;
+    } else {
+      const payload = {
+        company_name: el('p_company_name').value,
+        contact_name: el('p_contact_name').value,
+        mobile: el('p_mobile').value,
+        email: el('p_email').value,
+        notes: el('p_notes').value,
+      };
+      const saved = id
+        ? await api(`/api/partners/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+        : await api('/api/partners', { method: 'POST', body: JSON.stringify(payload) });
+      await syncRecordLabels('partner', saved.id);
+      saved.labels = labels;
+
+      const idx = state.partners.findIndex((p) => p.id === saved.id);
+      if (idx >= 0) state.partners[idx] = saved;
+      else state.partners.push(saved);
+      resortPartners();
+      state.lastTouchedId = saved.id;
+    }
+
+    closeModal('recordModal');
+    render();
+  } catch (err) {
+    // Left enabled here (unlike the success path) since the modal stays open
+    // for a retry — see openModal() for why success doesn't re-enable it.
+    submitBtn.disabled = false;
+    alert('Could not save: ' + err.message);
   }
-
-  closeModal('recordModal');
-  render();
 }
 
 async function deleteRecord() {
@@ -833,16 +970,25 @@ async function deleteRecord() {
   if (!id) return;
   if (!confirm(`Delete this ${type}? This cannot be undone.`)) return;
 
-  if (type === 'client') {
-    await api(`/api/clients/${id}`, { method: 'DELETE' });
-    await loadClients();
-    if (state.clientView === 'archived') await loadArchivedClients();
-  } else {
-    await api(`/api/partners/${id}`, { method: 'DELETE' });
-    await loadPartners();
+  const btn = el('deleteRecordBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+
+  try {
+    if (type === 'client') {
+      await api(`/api/clients/${id}`, { method: 'DELETE' });
+      state.clients = state.clients.filter((c) => c.id !== Number(id));
+      if (state.clientView === 'archived') await loadArchivedClients();
+    } else {
+      await api(`/api/partners/${id}`, { method: 'DELETE' });
+      state.partners = state.partners.filter((p) => p.id !== Number(id));
+    }
+    closeModal('recordModal');
+    render();
+  } catch (err) {
+    btn.disabled = false;
+    alert('Could not delete: ' + err.message);
   }
-  closeModal('recordModal');
-  render();
 }
 
 // ---------- Call log modal ----------
@@ -856,19 +1002,29 @@ function openCallModal(clientId) {
 
 async function submitCallForm(evt) {
   evt.preventDefault();
-  const clientId = el('call_client_id').value;
-  const type = document.querySelector('input[name="call_type"]:checked').value;
-  const note = el('call_note').value;
+  const submitBtn = el('callForm').querySelector('button[type="submit"]');
+  if (submitBtn.disabled) return;
+  submitBtn.disabled = true;
 
-  await api(`/api/clients/${clientId}/calls`, {
-    method: 'POST',
-    body: JSON.stringify({ type, note }),
-  });
+  try {
+    const clientId = Number(el('call_client_id').value);
+    const type = document.querySelector('input[name="call_type"]:checked').value;
+    const note = el('call_note').value;
 
-  state.lastTouchedId = Number(clientId);
-  await loadClients();
-  closeModal('callModal');
-  render();
+    const call = await api(`/api/clients/${clientId}/calls`, {
+      method: 'POST',
+      body: JSON.stringify({ type, note }),
+    });
+
+    const client = state.clients.find((c) => c.id === clientId);
+    if (client) client.last_contact = { type: call.type, logged_at: call.logged_at };
+    state.lastTouchedId = clientId;
+    closeModal('callModal');
+    render();
+  } catch (err) {
+    submitBtn.disabled = false;
+    alert('Could not log contact: ' + err.message);
+  }
 }
 
 // ---------- Modal plumbing ----------
@@ -895,6 +1051,12 @@ function applyModalProgress(id, t) {
 function openModal(id) {
   const overlay = el(id);
   overlay.classList.remove('hidden');
+  // Buttons are deliberately left disabled after a successful submit (see
+  // submitRecordForm etc.) because closeModal() fades out over ~300ms rather
+  // than hiding immediately — re-enabling right away would let a second
+  // click during that fade fire a real duplicate request. Opening the modal
+  // fresh is what clears it.
+  overlay.querySelectorAll('button:disabled').forEach((btn) => { btn.disabled = false; });
 
   const motion = getModalMotion(id);
   if (motion.controller) motion.controller.cancel();
