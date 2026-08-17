@@ -1604,7 +1604,7 @@ async function checkAuthAndInit() {
   await window.supabaseReady;
 
   window.onPasswordRecovery = showPasswordResetForm;
-  if (window.pendingPasswordRecovery) return showPasswordResetForm();
+  if (window.pendingPasswordRecovery || window.hadRecoveryHashOnLoad) return showPasswordResetForm();
 
   let status;
   try {

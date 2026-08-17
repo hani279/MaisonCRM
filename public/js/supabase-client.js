@@ -1,3 +1,12 @@
+// Captured immediately, before Supabase's client (created below) gets a
+// chance to touch the URL — it clears the recovery hash from the address bar
+// shortly after processing it, and by then it may have also already
+// silently established a session from the token. Relying on getSession()
+// alone at that point can't tell "freshly landed via reset link" apart from
+// "already signed in", so checkAuthAndInit() checks this synchronous
+// snapshot instead of racing the async PASSWORD_RECOVERY event.
+window.hadRecoveryHashOnLoad = /type=recovery/.test(window.location.hash);
+
 // Fetches the (public, safe-to-expose) Supabase URL + anon key from the
 // backend and initializes the browser Supabase client. app.js awaits
 // window.supabaseReady before touching window.supabaseClient.
