@@ -22,11 +22,19 @@ function belongsToThisSchema(u) {
   return u.user_metadata && u.user_metadata.schema === db.schema;
 }
 
+// Agency/dev accounts (e.g. whoever built and maintains this deployment) are
+// tagged hidden: true so they don't show up in the client's own Settings ->
+// Users list and don't read as team members who need managing. The accounts
+// themselves still work for signing in — this only affects this listing.
+function isHidden(u) {
+  return !!(u.user_metadata && u.user_metadata.hidden);
+}
+
 router.get('/', async (req, res) => {
   const { data, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
   if (error) return res.status(500).json({ error: error.message });
   const users = data.users
-    .filter(belongsToThisSchema)
+    .filter((u) => belongsToThisSchema(u) && !isHidden(u))
     .sort((a, b) => publicUser(a).name.localeCompare(publicUser(b).name));
   res.json(users.map(publicUser));
 });
