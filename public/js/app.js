@@ -192,6 +192,12 @@ function matchesFilters(record, isClient) {
 }
 
 function render() {
+  // Background data refreshes (e.g. the pipeline toggle's post-switch sync)
+  // can resolve after the user has already navigated to Settings. Without
+  // this guard, render() would still re-show the board under the settings
+  // panel, pushing it down the page.
+  if (state.page === 'settings') return;
+
   const isClient = state.pipeline === 'client';
   if (!isClient) state.clientView = 'board';
 
