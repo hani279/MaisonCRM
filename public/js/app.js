@@ -243,9 +243,10 @@ function render() {
   el('listView').classList.remove('hidden');
 
   if (state.clientView === 'completed') {
-    const clientStages = state.stagesByPipeline.client;
-    const lastStage = clientStages[clientStages.length - 1];
-    const filtered = (lastStage ? state.clients.filter((c) => c.stage_id === lastStage.id) : [])
+    // Named explicitly rather than "the last stage" -- Lost sits after
+    // Settlement positionally but isn't a completion.
+    const settlementStage = state.stagesByPipeline.client.find((s) => s.name === 'Settlement');
+    const filtered = (settlementStage ? state.clients.filter((c) => c.stage_id === settlementStage.id) : [])
       .filter((c) => (!q || matchesSearch(c)) && matchesFilters(c, true));
     renderListView(filtered, 'completed');
     animateTouchedCard();

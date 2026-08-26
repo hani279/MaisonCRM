@@ -16,6 +16,7 @@ const CLIENT_STAGES = [
   'Cooling-off / Unconditional',
   'Pre-Settlement Inspection',
   'Settlement',
+  'Lost',
 ];
 
 const PARTNER_STAGES = [

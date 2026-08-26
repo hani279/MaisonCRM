@@ -82,6 +82,16 @@ router.get('/', async (req, res) => {
   res.json(await Promise.all(rows.map(withExtras)));
 });
 
+// Setting status to 'lost' automatically moves the client to the Lost
+// column, from whichever stage it's currently in -- the one way to reach
+// Lost that doesn't depend on where the client already sits.
+async function resolveLostStageId() {
+  const { rows } = await db.query(
+    "SELECT id FROM pipeline_stages WHERE pipeline = 'client' AND name = 'Lost' LIMIT 1"
+  );
+  return rows[0] ? rows[0].id : null;
+}
+
 router.post('/', async (req, res) => {
   const {
     name, phone, email, budget_label, stage_id, status,
@@ -93,6 +103,9 @@ router.post('/', async (req, res) => {
   }
 
   let resolvedStageId = stage_id;
+  if ((status || 'cold') === 'lost') {
+    resolvedStageId = (await resolveLostStageId()) || resolvedStageId;
+  }
   if (!resolvedStageId) {
     const { rows } = await db.query(
       "SELECT id FROM pipeline_stages WHERE pipeline = 'client' ORDER BY position LIMIT 1"
@@ -136,6 +149,10 @@ router.patch('/:id', async (req, res) => {
   const updates = {};
   for (const f of fields) {
     if (f in req.body) updates[f] = req.body[f] === '' ? null : req.body[f];
+  }
+  if (updates.status === 'lost') {
+    const lostStageId = await resolveLostStageId();
+    if (lostStageId) updates.stage_id = lostStageId;
   }
   if (Object.keys(updates).length === 0) {
     return res.json(await withExtras(existing));
