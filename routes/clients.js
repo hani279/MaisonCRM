@@ -40,7 +40,7 @@ router.get('/export.csv', async (req, res) => {
 
   const header = [
     'Name', 'Phone', 'Email', 'Budget', 'Stage', 'Status',
-    'Next Action', 'Next Action Date', 'Referred By', 'Referral Fee Note', 'Notes',
+    'Next Action', 'Next Action Date', 'Referred By', 'Referral Fee Note', 'Brief / Property Requirements', 'Notes',
   ];
   const lines = [header.join(',')];
   for (const r of rows) {
@@ -58,6 +58,7 @@ router.get('/export.csv', async (req, res) => {
       csvEscape(r.next_action_date),
       csvEscape(referredBy),
       csvEscape(r.referral_fee_note),
+      csvEscape(r.brief),
       csvEscape(r.notes),
     ].join(','));
   }
@@ -84,7 +85,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   const {
     name, phone, email, budget_label, stage_id, status,
-    next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, notes,
+    next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, brief, notes,
   } = req.body;
 
   if (!name || !name.trim()) {
@@ -101,8 +102,8 @@ router.post('/', async (req, res) => {
 
   const { rows } = await db.query(
     `INSERT INTO clients
-      (name, phone, email, budget_label, stage_id, status, next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      (name, phone, email, budget_label, stage_id, status, next_action_label, next_action_date, referred_by_partner_id, referral_fee_note, brief, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING *`,
     [
       name.trim(),
@@ -115,6 +116,7 @@ router.post('/', async (req, res) => {
       next_action_date || null,
       referred_by_partner_id || null,
       referral_fee_note || null,
+      brief || null,
       notes || null,
     ]
   );
@@ -129,7 +131,7 @@ router.patch('/:id', async (req, res) => {
 
   const fields = [
     'name', 'phone', 'email', 'budget_label', 'status',
-    'next_action_label', 'next_action_date', 'referred_by_partner_id', 'referral_fee_note', 'notes',
+    'next_action_label', 'next_action_date', 'referred_by_partner_id', 'referral_fee_note', 'brief', 'notes',
   ];
   const updates = {};
   for (const f of fields) {

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS clients (
   next_action_date TEXT,
   referred_by_partner_id BIGINT REFERENCES partners(id) ON DELETE SET NULL,
   referral_fee_note TEXT,
+  brief TEXT,
   notes TEXT,
   archived_at TIMESTAMPTZ DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -42,7 +43,10 @@ CREATE TABLE IF NOT EXISTS clients (
 CREATE TABLE IF NOT EXISTS call_logs (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   client_id BIGINT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('call', 'text', 'voicemail')),
+  -- 'call'/'text'/'voicemail' predate the call_1..4/message_left scheme and
+  -- are kept valid only so old rows (and fresh copies of them) stay intact;
+  -- the UI no longer offers them.
+  type TEXT NOT NULL CHECK (type IN ('call_1', 'call_2', 'call_3', 'call_4', 'message_left', 'call', 'text', 'voicemail')),
   note TEXT,
   logged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()

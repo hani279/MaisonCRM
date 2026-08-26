@@ -570,7 +570,7 @@ body {
 }
 .spacer { flex: 1; }
 
-.call-type-row { display: flex; gap: 8px; }
+.call-type-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .radio-pill {
   border: 1px solid var(--border);
   border-radius: 20px;

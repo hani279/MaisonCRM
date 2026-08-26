@@ -210,6 +210,7 @@
           </select>
         </label>
         <label>Referral fee note <input type="text" id="f_referral_fee_note" placeholder="e.g. 20% of commission" /></label>
+        <label class="full-width">Brief / Property Requirements <textarea id="f_brief" placeholder="e.g. 3 bed, 2 bath, walk to station, north-facing"></textarea></label>
         <label class="full-width">Notes <textarea id="f_notes"></textarea></label>
       </div>
 
@@ -249,9 +250,11 @@
     <form id="callForm" class="modal-body">
       <input type="hidden" id="call_client_id" />
       <div class="call-type-row">
-        <label class="radio-pill"><input type="radio" name="call_type" value="call" checked /> Call</label>
-        <label class="radio-pill"><input type="radio" name="call_type" value="text" /> Text</label>
-        <label class="radio-pill"><input type="radio" name="call_type" value="voicemail" /> Voicemail</label>
+        <label class="radio-pill"><input type="radio" name="call_type" value="call_1" checked /> Call 1</label>
+        <label class="radio-pill"><input type="radio" name="call_type" value="call_2" /> Call 2</label>
+        <label class="radio-pill"><input type="radio" name="call_type" value="call_3" /> Call 3</label>
+        <label class="radio-pill"><input type="radio" name="call_type" value="call_4" /> Call 4</label>
+        <label class="radio-pill"><input type="radio" name="call_type" value="message_left" /> Message Left</label>
       </div>
       <label class="full-width">Note (optional) <textarea id="call_note"></textarea></label>
       <div class="modal-footer">

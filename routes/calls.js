@@ -16,8 +16,12 @@ router.post('/clients/:clientId/calls', async (req, res) => {
   if (!clientRows[0]) return res.status(404).json({ error: 'client not found' });
 
   const { type, note, logged_at } = req.body;
-  if (!['call', 'text', 'voicemail'].includes(type)) {
-    return res.status(400).json({ error: 'type must be call, text, or voicemail' });
+  // 'call'/'text'/'voicemail' kept accepted (not offered in the UI anymore)
+  // so this stays in sync with the call_logs CHECK constraint, which keeps
+  // allowing them for existing historical rows.
+  const validTypes = ['call_1', 'call_2', 'call_3', 'call_4', 'message_left', 'call', 'text', 'voicemail'];
+  if (!validTypes.includes(type)) {
+    return res.status(400).json({ error: `type must be one of: ${validTypes.join(', ')}` });
   }
 
   const { rows } = await db.query(

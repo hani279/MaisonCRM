@@ -112,7 +112,12 @@ function formatRelative(dateStr) {
 }
 
 function callTypeLabel(type) {
-  return { call: 'Call', text: 'Text', voicemail: 'Voicemail' }[type] || type;
+  return {
+    // Current options.
+    call_1: 'Call 1', call_2: 'Call 2', call_3: 'Call 3', call_4: 'Call 4', message_left: 'Message Left',
+    // Kept so older log entries still display correctly.
+    call: 'Call', text: 'Text', voicemail: 'Voicemail',
+  }[type] || type;
 }
 
 // ---------- Loading ----------
@@ -863,6 +868,7 @@ function openClientModal(client) {
   el('f_next_action_date').value = client?.next_action_date || '';
   el('f_referred_by_partner_id').value = client?.referred_by_partner_id || '';
   el('f_referral_fee_note').value = client?.referral_fee_note || '';
+  el('f_brief').value = client?.brief || '';
   el('f_notes').value = client?.notes || '';
 
   el('deleteRecordBtn').classList.toggle('hidden', !client);
@@ -926,6 +932,7 @@ async function submitRecordForm(evt) {
         next_action_date: el('f_next_action_date').value,
         referred_by_partner_id: el('f_referred_by_partner_id').value || null,
         referral_fee_note: el('f_referral_fee_note').value,
+        brief: el('f_brief').value,
         notes: el('f_notes').value,
       };
       const saved = id
@@ -1002,7 +1009,7 @@ async function deleteRecord() {
 function openCallModal(clientId) {
   el('call_client_id').value = clientId;
   el('call_note').value = '';
-  document.querySelector('input[name="call_type"][value="call"]').checked = true;
+  document.querySelector('input[name="call_type"][value="call_1"]').checked = true;
   openModal('callModal');
 }
 
