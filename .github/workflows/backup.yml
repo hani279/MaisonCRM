@@ -1,0 +1,45 @@
+name: Daily database backup
+
+on:
+  schedule:
+    # 17:00 UTC ≈ 3am Sydney time (AEST/AEDT), a quiet window for the real app.
+    - cron: '0 17 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Checkout backups repo
+        uses: actions/checkout@v4
+        with:
+          repository: hani279/maisons-crm-backups
+          ssh-key: ${{ secrets.BACKUPS_DEPLOY_KEY }}
+          path: backups-repo
+
+      - name: Dump the real (public schema) database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p backups-repo/backups
+          timestamp=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+          pg_dump "$DATABASE_URL" --schema=public --no-owner --no-privileges \
+            -f "backups-repo/backups/maisons-${timestamp}.sql"
+
+      - name: Commit and push
+        working-directory: backups-repo
+        run: |
+          set -euo pipefail
+          git config user.name "Maisons Backup Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add backups/
+          if git diff --cached --quiet; then
+            echo "No changes to back up (dump identical to yesterday's)."
+          else
+            git commit -m "Daily backup $(date -u +%Y-%m-%d)"
+            git push
+          fi
