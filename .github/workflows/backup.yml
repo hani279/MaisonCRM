@@ -17,6 +17,7 @@ jobs:
           sudo apt-get install -y postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
 
       - name: Checkout backups repo
         uses: actions/checkout@v4
@@ -30,6 +31,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           set -euo pipefail
+          pg_dump --version
           mkdir -p backups-repo/backups
           timestamp=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
           pg_dump "$DATABASE_URL" --schema=public --no-owner --no-privileges \
