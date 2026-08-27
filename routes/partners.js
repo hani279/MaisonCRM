@@ -17,6 +17,44 @@ async function withExtras(partner) {
   return { ...partner, referred_client_count: Number(countRows[0].c), labels };
 }
 
+// Same shape as withExtras, but for the full list: two bulk queries instead
+// of two-per-partner. See the identical comment in routes/clients.js -- the
+// pool is capped at 3 connections, so per-row queries serialize badly once
+// the row count is more than a handful.
+async function withExtrasBulk(partners) {
+  if (partners.length === 0) return [];
+  const ids = partners.map((p) => p.id);
+
+  const { rows: countRows } = await db.query(
+    `SELECT referred_by_partner_id AS partner_id, COUNT(*) AS c
+     FROM clients WHERE referred_by_partner_id = ANY($1)
+     GROUP BY referred_by_partner_id`,
+    [ids]
+  );
+  const countByPartner = new Map(countRows.map((r) => [r.partner_id, Number(r.c)]));
+
+  const { rows: labelRows } = await db.query(
+    `SELECT pl.partner_id, l.id, l.name, l.color
+     FROM labels l
+     JOIN partner_labels pl ON pl.label_id = l.id
+     WHERE pl.partner_id = ANY($1)
+     ORDER BY pl.partner_id, l.name`,
+    [ids]
+  );
+  const labelsByPartner = new Map();
+  for (const row of labelRows) {
+    const list = labelsByPartner.get(row.partner_id) || [];
+    list.push({ id: row.id, name: row.name, color: row.color });
+    labelsByPartner.set(row.partner_id, list);
+  }
+
+  return partners.map((p) => ({
+    ...p,
+    referred_client_count: countByPartner.get(p.id) || 0,
+    labels: labelsByPartner.get(p.id) || [],
+  }));
+}
+
 router.get('/', async (req, res) => {
   const { rows } = await db.query(
     `SELECT p.*, s.name AS stage_name, s.position AS stage_position
@@ -24,7 +62,7 @@ router.get('/', async (req, res) => {
      JOIN pipeline_stages s ON s.id = p.stage_id
      ORDER BY s.position, p.contact_name`
   );
-  res.json(await Promise.all(rows.map(withExtras)));
+  res.json(await withExtrasBulk(rows));
 });
 
 router.post('/', async (req, res) => {

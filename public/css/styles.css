@@ -327,8 +327,12 @@ body {
 }
 .view-tab:hover { background: rgba(0, 0, 0, 0.04); }
 .view-tab.active { background: rgba(0, 113, 227, 0.1); color: var(--accent-blue); }
+/* Leads gets its own accent (same amber as the "Active/Hot" status) so it
+   reads as visually distinct from the other tabs -- it's the one that
+   needs regular attention. */
+.view-tab.active[data-view="leads"] { background: rgba(255, 149, 0, 0.12); color: var(--status-active); }
 
-/* ---------- List view (Completed / Archived) ---------- */
+/* ---------- List view (Completed / Archived / Leads) ---------- */
 
 .list-view {
   display: flex;
@@ -470,6 +474,21 @@ body {
 
 .card-actions { display: flex; gap: 6px; }
 .card-actions .btn { flex: 1; }
+
+.lead-stage-select {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--text);
+  background: #fff;
+  cursor: pointer;
+  min-width: 0;
+}
+.lead-stage-select:disabled { opacity: 0.5; cursor: default; }
 
 .partner-count {
   font-size: 11px;

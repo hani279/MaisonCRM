@@ -162,6 +162,7 @@ async function refreshAll() {
 
 const VIEW_COPY = {
   board: ['Client Pipeline', ''],
+  leads: ['Leads', ''],
   completed: ['Completed Clients', ''],
   archived: ['Archived Clients', ''],
 };
@@ -172,12 +173,21 @@ function setPageHeader(title, subtitle) {
   el('pageSubtitle').classList.toggle('hidden', !subtitle);
 }
 
+// Leads live exclusively in the Leads tab -- the Board's kanban never shows
+// that stage as a column, so this filters it out wherever the Board counts
+// or lists client stages.
+function clientBoardStages() {
+  const leadsStageId = (state.stagesByPipeline.client[0] || {}).id;
+  return state.stagesByPipeline.client.filter((s) => s.id !== leadsStageId);
+}
+
 function renderKanban(records, isClient) {
   el('board').classList.remove('hidden');
   el('listView').classList.add('hidden');
   const board = el('board');
   board.innerHTML = '';
-  state.stagesByPipeline[state.pipeline].forEach((stage, i) => {
+  const stages = isClient ? clientBoardStages() : state.stagesByPipeline[state.pipeline];
+  stages.forEach((stage, i) => {
     const stageRecords = records.filter((r) => r.stage_id === stage.id);
     board.appendChild(renderColumn(stage, i, stageRecords, isClient));
   });
@@ -241,6 +251,17 @@ function render() {
 
   el('board').classList.add('hidden');
   el('listView').classList.remove('hidden');
+
+  if (state.clientView === 'leads') {
+    // Leads = whoever is sitting in the very first stage, regardless of
+    // whatever it's named -- freshly added/imported and not yet triaged.
+    const leadsStage = state.stagesByPipeline.client[0];
+    const filtered = (leadsStage ? state.clients.filter((c) => c.stage_id === leadsStage.id) : [])
+      .filter((c) => (!q || matchesSearch(c)) && matchesFilters(c, true));
+    renderListView(filtered, 'leads');
+    animateTouchedCard();
+    return;
+  }
 
   if (state.clientView === 'completed') {
     // Named explicitly rather than "the last stage" -- Lost sits after
@@ -334,13 +355,18 @@ function renderListView(records, mode) {
   if (records.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-column';
-    empty.textContent = mode === 'archived' ? 'No archived clients' : 'No completed clients yet';
+    empty.textContent = mode === 'archived' ? 'No archived clients'
+      : mode === 'leads' ? 'No leads right now'
+      : 'No completed clients yet';
     container.appendChild(empty);
     return;
   }
 
   records.forEach((client) => {
-    container.appendChild(mode === 'archived' ? renderArchivedClientCard(client) : renderCompletedClientCard(client));
+    const card = mode === 'archived' ? renderArchivedClientCard(client)
+      : mode === 'leads' ? renderLeadCard(client)
+      : renderCompletedClientCard(client);
+    container.appendChild(card);
   });
 }
 
@@ -399,7 +425,7 @@ function renderClientCard(client, stageIndex) {
     : '';
 
   const isFirst = stageIndex === 0;
-  const isLast = stageIndex === state.stagesByPipeline.client.length - 1;
+  const isLast = stageIndex === clientBoardStages().length - 1;
   const moving = pendingMoveIds.has(client.id);
 
   card.innerHTML = `
@@ -516,6 +542,43 @@ function renderArchivedClientCard(client) {
   return card;
 }
 
+function renderLeadCard(client) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.dataset.recordId = client.id;
+
+  const metaParts = [client.phone, client.budget_label].filter(Boolean).join(' · ');
+  const lastContact = client.last_contact
+    ? `<div class="last-contact">Last contact: ${callTypeLabel(client.last_contact.type)} · ${formatRelative(client.last_contact.logged_at)}</div>`
+    : '';
+  const busy = pendingMoveIds.has(client.id);
+  const stageOptions = state.stagesByPipeline.client
+    .map((s) => `<option value="${s.id}" ${s.id === client.stage_id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`)
+    .join('');
+
+  card.innerHTML = `
+    <div class="card-top">
+      <p class="card-name">${escapeHtml(client.name)}</p>
+    </div>
+    <div class="card-meta">${escapeHtml(metaParts)}</div>
+    ${renderLabelChips(client.labels)}
+    ${lastContact}
+    <div class="card-actions">
+      <select class="lead-stage-select" data-action="move-to-stage" ${busy ? 'disabled' : ''}>${stageOptions}</select>
+      <button class="card-icon-btn" data-action="log-call" title="Log call/text/voicemail">${ICONS.phone}</button>
+    </div>
+  `;
+
+  bindCardOpensEdit(card, () => openClientModal(client));
+  card.querySelector('[data-action="log-call"]').addEventListener('click', () => openCallModal(client.id));
+  card.querySelector('[data-action="move-to-stage"]').addEventListener('click', (e) => e.stopPropagation());
+  card.querySelector('[data-action="move-to-stage"]').addEventListener('change', (e) => {
+    moveClientToStage(client.id, Number(e.target.value));
+  });
+
+  return card;
+}
+
 function animateTouchedCard() {
   if (!state.lastTouchedId) return;
   const id = state.lastTouchedId;
@@ -580,6 +643,34 @@ async function moveClient(id, direction) {
 
   try {
     await api(`/api/clients/${id}/move`, { method: 'PATCH', body: JSON.stringify({ direction }) });
+  } catch (err) {
+    client.stage_id = previousStageId;
+    resortClients();
+    alert('Could not move client: ' + err.message);
+  } finally {
+    pendingMoveIds.delete(id);
+    render();
+  }
+}
+
+// Jumps a client straight to an arbitrary stage (e.g. from the Leads tab's
+// per-row picker), rather than one step at a time like moveClient.
+async function moveClientToStage(id, stageId) {
+  if (pendingMoveIds.has(id)) return;
+  const client = state.clients.find((c) => c.id === id);
+  if (!client) return;
+  const targetStage = state.stagesByPipeline.client.find((s) => s.id === stageId);
+  if (!targetStage || targetStage.id === client.stage_id) return;
+
+  const previousStageId = client.stage_id;
+  pendingMoveIds.add(id);
+  client.stage_id = targetStage.id;
+  resortClients();
+  state.lastTouchedId = id;
+  render();
+
+  try {
+    await api(`/api/clients/${id}/move`, { method: 'PATCH', body: JSON.stringify({ stage_id: stageId }) });
   } catch (err) {
     client.stage_id = previousStageId;
     resortClients();
@@ -1376,10 +1467,14 @@ async function commitImport() {
     el('importResult').classList.remove('hidden');
     el('importResult').textContent =
       `Imported ${result.imported} client${result.imported === 1 ? '' : 's'}` +
-      (result.skipped ? `, skipped ${result.skipped} row${result.skipped === 1 ? '' : 's'} with no name.` : '.');
+      (result.duplicates ? `, skipped ${result.duplicates} already in the system (matched by phone or email)` : '') +
+      (result.skipped ? `, skipped ${result.skipped} row${result.skipped === 1 ? '' : 's'} with no name` : '') +
+      '.';
     el('importMapping').classList.add('hidden');
     el('importFileInput').value = '';
     el('importFileName').textContent = '';
+    await loadClients();
+    render();
   } catch (err) {
     alert('Import failed: ' + err.message);
   } finally {
@@ -1595,6 +1690,12 @@ async function submitPasswordReset(evt) {
 async function showApp() {
   el('authView').classList.add('hidden');
   el('topbarActions').classList.remove('hidden');
+  // showAuthScreen() (always run first for a fresh sign-in -- there's no
+  // session yet to skip straight past it) hides the toolbar. Nothing else
+  // un-hides it afterward except the Settings <-> pipeline toggle, so a
+  // fresh sign-in landed with the search bar and view tabs missing until
+  // something else happened to call setPage().
+  el('toolbar').classList.remove('hidden');
 
   positionToggleIndicator(false);
   await refreshAll();

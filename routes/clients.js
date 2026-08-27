@@ -28,6 +28,48 @@ async function withExtras(client) {
   };
 }
 
+// Same shape as withExtras, but for the full list: two bulk queries instead
+// of two-per-client. With the pool capped at 3 connections (db/index.js),
+// withExtras's per-client queries serialize almost completely once the
+// client count gets into the hundreds -- a CSV import is exactly when that
+// bites, since it's also the moment the list is largest.
+async function withExtrasBulk(clients) {
+  if (clients.length === 0) return [];
+  const ids = clients.map((c) => c.id);
+
+  const { rows: lastCalls } = await db.query(
+    `SELECT DISTINCT ON (client_id) client_id, type, logged_at
+     FROM call_logs
+     WHERE client_id = ANY($1)
+     ORDER BY client_id, logged_at DESC, id DESC`,
+    [ids]
+  );
+  const lastContactByClient = new Map(
+    lastCalls.map((r) => [r.client_id, { type: r.type, logged_at: r.logged_at }])
+  );
+
+  const { rows: labelRows } = await db.query(
+    `SELECT cl.client_id, l.id, l.name, l.color
+     FROM labels l
+     JOIN client_labels cl ON cl.label_id = l.id
+     WHERE cl.client_id = ANY($1)
+     ORDER BY cl.client_id, l.name`,
+    [ids]
+  );
+  const labelsByClient = new Map();
+  for (const row of labelRows) {
+    const list = labelsByClient.get(row.client_id) || [];
+    list.push({ id: row.id, name: row.name, color: row.color });
+    labelsByClient.set(row.client_id, list);
+  }
+
+  return clients.map((c) => ({
+    ...c,
+    last_contact: lastContactByClient.get(c.id) || null,
+    labels: labelsByClient.get(c.id) || [],
+  }));
+}
+
 router.get('/export.csv', async (req, res) => {
   const { rows } = await db.query(
     `SELECT c.*, s.name AS stage_name, p.company_name AS referred_by_company, p.contact_name AS referred_by_contact
@@ -79,7 +121,7 @@ router.get('/', async (req, res) => {
      WHERE c.archived_at IS ${wantArchived ? 'NOT NULL' : 'NULL'}
      ORDER BY s.position, c.name`
   );
-  res.json(await Promise.all(rows.map(withExtras)));
+  res.json(await withExtrasBulk(rows));
 });
 
 // Setting status to 'lost' automatically moves the client to the Lost

@@ -36,6 +36,12 @@ function resolveField(record, mapping) {
   return null;
 }
 
+// Strips spaces/dashes/parens so "0400 000 000" and "0400-000-000" compare
+// equal -- a dedupe heuristic, not full phone-number parsing.
+function normalizePhone(phone) {
+  return phone ? phone.replace(/[\s\-()]/g, '') : null;
+}
+
 async function main() {
   const filePath = process.argv[2];
   const dryRun = process.argv.includes('--dry-run');
@@ -61,8 +67,16 @@ async function main() {
     process.exit(1);
   }
 
+  // Re-running this script -- on the same file, or a file that overlaps a
+  // prior run -- would otherwise silently create full duplicate clients.
+  // Existing phones/emails are loaded once up front and checked per row.
+  const { rows: existingRows } = await db.query('SELECT phone, email FROM clients');
+  const existingPhones = new Set(existingRows.map((r) => normalizePhone(r.phone)).filter(Boolean));
+  const existingEmails = new Set(existingRows.map((r) => (r.email || '').toLowerCase()).filter(Boolean));
+
   let imported = 0;
   let skipped = 0;
+  let duplicates = 0;
 
   const client = await db.pool.connect();
   try {
@@ -71,14 +85,21 @@ async function main() {
       const name = resolveField(record, COLUMN_MAP.name);
       if (!name) { skipped++; continue; }
 
+      const phone = resolveField(record, COLUMN_MAP.phone);
+      const email = resolveField(record, COLUMN_MAP.email);
+      const normalizedPhone = normalizePhone(phone);
+      const isDuplicate = (normalizedPhone && existingPhones.has(normalizedPhone))
+        || (!normalizedPhone && email && existingEmails.has(email.toLowerCase()));
+      if (isDuplicate) { duplicates++; continue; }
+
       if (!dryRun) {
         await client.query(
           `INSERT INTO clients (name, phone, email, budget_label, notes, stage_id, status)
            VALUES ($1, $2, $3, $4, $5, $6, 'cold')`,
           [
             name,
-            resolveField(record, COLUMN_MAP.phone),
-            resolveField(record, COLUMN_MAP.email),
+            phone,
+            email,
             resolveField(record, COLUMN_MAP.budget_label),
             resolveField(record, COLUMN_MAP.notes),
             firstStage.id,
@@ -86,6 +107,11 @@ async function main() {
         );
       }
       imported++;
+      // Guards against duplicates *within* the same CSV too, not just
+      // against what was already in the database -- matters for --dry-run
+      // too, so the preview reflects what a real run would actually do.
+      if (normalizedPhone) existingPhones.add(normalizedPhone);
+      if (email) existingEmails.add(email.toLowerCase());
     }
     if (dryRun) await client.query('ROLLBACK');
     else await client.query('COMMIT');
@@ -98,6 +124,7 @@ async function main() {
 
   console.log(`${dryRun ? '[dry run] Would import' : 'Imported'}: ${imported}`);
   console.log(`Skipped (no name found): ${skipped}`);
+  console.log(`Skipped (already in the system, matched by phone or email): ${duplicates}`);
   if (dryRun) console.log('Re-run without --dry-run once COLUMN_MAP looks correct above.');
 
   await db.pool.end();

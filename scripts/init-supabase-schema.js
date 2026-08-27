@@ -5,6 +5,7 @@ const { Client } = require('pg');
 const { createClient } = require('@supabase/supabase-js');
 
 const CLIENT_STAGES = [
+  'Leads',
   'Initial Consultation',
   'Engagement & Agreement',
   'Brief Development',
@@ -39,7 +40,7 @@ async function seedStages(client, pipeline, names) {
   for (let i = 0; i < names.length; i++) {
     await client.query(
       'INSERT INTO pipeline_stages (pipeline, name, position) VALUES ($1, $2, $3)',
-      [pipeline, names[i], i + 1]
+      [pipeline, names[i], pipeline === 'client' ? i : i + 1]
     );
   }
   console.log(`  seeded ${names.length} ${pipeline} stages.`);
