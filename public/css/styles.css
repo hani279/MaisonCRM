@@ -521,6 +521,7 @@ body {
   max-width: 92vw;
   max-height: 88vh;
   overflow-y: auto;
+  overflow-x: hidden;
   box-shadow: var(--shadow-modal);
   transform: scale(0.96);
   opacity: 0;
@@ -551,8 +552,8 @@ body {
 .modal-close:hover { background: rgba(0, 0, 0, 0.06); }
 .modal-close:active { transform: scale(0.9); }
 
-.modal-body { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
-.field-group { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.modal-body { padding: 20px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.field-group { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-width: 0; }
 .field-group.hidden { display: none; }
 .field-group label {
   display: flex;
@@ -562,9 +563,13 @@ body {
   letter-spacing: 0.005em;
   color: var(--text-muted);
   gap: 5px;
+  min-width: 0;
 }
 .field-group .full-width { grid-column: 1 / -1; }
 .field-group input, .field-group select, .field-group textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   font: inherit;
   padding: 8px 10px;
   border: 1px solid var(--border);
